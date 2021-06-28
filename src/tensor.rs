@@ -11,6 +11,7 @@ struct Node {
     function: Option<Box<dyn Function>>,
     weights: Option<[f64; 2]>,
     deps: [usize; 2],
+    forward: bool
 }
 
 pub enum Devices {
@@ -18,12 +19,13 @@ pub enum Devices {
     GPU,
 }
 
+#[derive(Clone, Debug)]
 pub enum RawTensor {
     CPU(Rc<ArrayD<f64>>),
 }
 
 trait Function {
-    fn forward(&self, tensor: &RawTensor) -> [f64; 2];
+    fn forward(&self, tensor: &RawTensor) -> RawTensor;
     fn backward(&self, tensor: &RawTensor) -> [f64; 2];
     fn name(&self) -> &str;
 }
@@ -31,8 +33,17 @@ trait Function {
 struct Sin;
 
 impl Function for Sin {
-    fn forward(&self, tensor: &RawTensor) -> [f64; 2] {
-        todo!()
+    fn forward(&self, tensor: &RawTensor) -> RawTensor {
+        match tensor {
+            RawTensor::CPU(x) => 
+            {
+                let val = x[0].sin();
+                let mut array = ArrayD::clone(x);
+                array[0] = val;
+                RawTensor::CPU(Rc::new(array))
+
+            }
+        }
     }
 
     fn backward(&self, tensor: &RawTensor) -> [f64; 2] {
@@ -46,13 +57,18 @@ impl Function for Sin {
     }
 }
 
+#[derive(Copy, Clone)]
 pub struct Tensor<'t> {
     tape: &'t Tape,
     index: usize,
-    pub value: Option<RawTensor>,
 }
 
 impl<'t> Tensor<'t> {
+
+    pub fn value(&self) -> RawTensor {
+        self.tape.nodes.borrow()[self.index].value.clone()
+    }
+
     pub fn grad(&self) -> Grad {
         let len = self.tape.len();
         let mut nodes = self.tape.nodes.borrow_mut();
@@ -61,10 +77,19 @@ impl<'t> Tensor<'t> {
         for i in (0..len).rev() {
             let node = &mut nodes[i];
 
+                if !node.forward {
+                let func = node.function.as_ref().unwrap();
+                    println!("Compute forward");
+                    node.value = func.forward(&node.value);
+                }
+            
             if node.weights.is_none() {
+                println!("{:?}", node.value);
                 let func = node.function.as_ref().unwrap();
                 println!("{} {}", "Performing function OP", func.name());
                 node.weights = Some(func.backward(&node.value));
+
+
             }
 
             let deriv = derivs[i];
@@ -79,16 +104,18 @@ impl<'t> Tensor<'t> {
         let mut nodes = self.tape.nodes.borrow_mut();
         let len = nodes.len();
 
+        let value = nodes[self.index].value.clone();
+
         nodes.push(Node {
-            value: self.value.unwrap(),
+            value,
             function: Some(Box::new(Sin {})),
             weights: None,
             deps: [self.index, len],
+            forward: false
         });
 
         Tensor {
             tape: self.tape,
-            value: None,
             index: len,
         }
     }
@@ -105,8 +132,11 @@ fn simple_test() {
 
     let x = t.tensor(4.);
     let y = x.sin();
-    let grad = y.grad();
+    let z = y.sin();
+    let grad = z.grad();
+    println!("{:?}", z.value());
     println!("{:?}", grad.derivs);
+    println!("{:?}", grad.wrt(x));
 }
 
 impl Tape {
@@ -132,11 +162,11 @@ impl Tape {
             function: None,
             weights: Some([0.0, 0.0]),
             deps: [len, len],
+            forward: false
         });
 
         Tensor {
             tape: self,
-            value: Some(RawTensor::CPU(x.clone())),
             index: len,
         }
     }
