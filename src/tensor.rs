@@ -1,279 +1,82 @@
-// https://github.com/Rufflewind/revad/blob/master/src/tape.rs
-// https://rufflewind.com/2016-12-30/reverse-mode-automatic-differentiation
-
-use ndarray::{Array, ArrayD, Ix2, Ix1, array};
 use std::cell::RefCell;
+use std::fmt;
+use std::marker::PhantomData;
 
-use std::rc::Rc;
+use crate::functions::Function;
 
-struct Node {
-    value: Option<RawTensor>,
-    value_for_grad: [Option<RawTensor>; 2],
-    function: Option<Box<dyn Function>>,
-    weights: Option<RawTensor>,
-    deps: [usize; 2],
-    forward: bool,
+#[derive(Clone, Copy)]
+pub struct GPUData<T: ?Sized> {
+    pub size: u64,
+    pub phantom: PhantomData<T>,
 }
 
-pub enum Devices {
+#[derive(Clone, Copy)]
+pub struct CPUData {
+    pub value: *const ndarray::ArrayD<f64>,
+}
+
+impl CPUData {
+    ///
+    /// Take an OwnedRepr Array and place it on the heap and store the pointer
+    ///
+    pub fn new(value: ndarray::ArrayD<f64>) -> Self {
+        let value = Box::new(value);
+        Self {
+            value: Box::into_raw(value),
+        }
+    }
+
+    ///
+    /// Returns a reference to the value
+    ///
+    pub fn value(&self) -> &ndarray::ArrayD<f64> {
+        return unsafe { &*self.value };
+    }
+}
+
+#[derive(Clone, Copy)]
+pub enum TensorData {
+    GPU(GPUData<f64>),
+    CPU(CPUData),
+}
+
+pub enum Device {
     CPU,
     GPU,
 }
 
-#[derive(Clone, Debug)]
-pub enum RawTensor {
-    CPU(Rc<ArrayD<f64>>),
+///
+/// Represents a node in a Wengert list
+///
+/// The node can have at most two dependencies on other nodes
+/// The Function enum indicates the func to apply to the value in a forward pass
+///
+
+struct Node {
+    deps: [usize; 2],
+    func: Function,
+    value: Option<TensorData>,
 }
 
-trait Function {
-    fn forward(&self, tensor: &RawTensor, other: Option<&RawTensor>) -> RawTensor;
-    fn backward(&self, tensor: &RawTensor, other: Option<&RawTensor>) -> RawTensor;
-    fn name(&self) -> &str;
-}
+///
+/// The Computational graph or Wengert list
+///
+/// We want several instances to be able to push to the node list, hence RefCell
+/// It may be possible to allow construction in several threads via a RwLock,
+/// but for now we assume single-threaded construction of the graph
+///
 
-struct Sin;
-
-impl Function for Sin {
-    fn forward(&self, tensor: &RawTensor, _other: Option<&RawTensor>) -> RawTensor {
-        match tensor {
-            RawTensor::CPU(x) => {
-                let val = x[0].sin();
-                let mut array = ArrayD::clone(x);
-                array[0] = val;
-                RawTensor::CPU(Rc::new(array))
-            }
-        }
-    }
-
-    fn backward(&self, tensor: &RawTensor, _other: Option<&RawTensor>) -> RawTensor {
-        match tensor {
-            RawTensor::CPU(x) => {
-                let val = x[0].cos();
-                let mut array = ArrayD::clone(x);
-                array[0] = val;
-                array[1] = 0.;
-
-                RawTensor::CPU(Rc::new(array))
-            }
-        }
-    }
-
-    fn name(&self) -> &str {
-        "sin"
-    }
-}
-
-struct Sum;
-
-impl Function for Sum {
-    fn forward(&self, tensor: &RawTensor, _other: Option<&RawTensor>) -> RawTensor {
-        match tensor {
-            RawTensor::CPU(x) => RawTensor::CPU(Rc::new(array![x.sum()].into_dyn()))
-        }
-    }
-
-    fn backward(&self, tensor: &RawTensor, _other: Option<&RawTensor>) -> RawTensor {
-        match tensor {
-
-            RawTensor::CPU(x) => {
-                let val =  x[0] * ArrayD::<f64>::ones(x.raw_dim());
-                RawTensor::CPU(Rc::new(val))
-            }
-        }
-    }
-    
-    fn name(&self) -> &str {
-        "sum"
-    }
-}
-
-struct Dot;
-
-impl Function for Dot {
-    fn forward(&self, tensor: &RawTensor, other: Option<&RawTensor>) -> RawTensor {
-        let other = other.unwrap();
-        match tensor {
-            RawTensor::CPU(x) => {
-                match other {
-                    RawTensor::CPU(y) => {
-                        println!("{:?}", x);
-                        println!("{:?}", y);
-                        let x2 = ArrayD::clone(x).into_dimensionality::<Ix2>().unwrap();
-                        let y2 = ArrayD::clone(y).into_dimensionality::<Ix1>().unwrap();
-                        RawTensor::CPU(Rc::new(x2.dot(&y2).into_dyn()))
-                    }
-                }
-            }
-        }
-    }
-
-    fn backward(&self, tensor: &RawTensor, other: Option<&RawTensor>) -> RawTensor {
-        let other = other.unwrap();
-        match tensor {
-            RawTensor::CPU(x) => {
-                match other {
-                    RawTensor::CPU(y) => {
-                        RawTensor::CPU(Rc::new(ArrayD::clone(x)))
-
-                    }
-                }
-            }
-        }
-    }
-    
-    fn name(&self) -> &str {
-        "sum"
-    }
-}
-
-#[derive(Copy, Clone)]
-pub struct Tensor<'t> {
-    tape: &'t Tape,
-    index: usize,
-}
-
-impl<'t> Tensor<'t> {
-    pub fn value(&self) -> RawTensor {
-        self.tape.nodes.borrow()[self.index].value.clone().unwrap()
-    }
-
-    pub fn compute(&self) {
-        let len = self.tape.len();
-        let mut nodes = self.tape.nodes.borrow_mut();
-
-        for i in 0..len {
-            if !nodes[i].forward {
-                if nodes[nodes[i].deps[1]].value.is_none() {
-                // The function is uniary so apply to first deps only
-                    let func = nodes[i].function.as_ref().unwrap();
-                    nodes[i].value =
-                        Some(func.forward(&nodes[nodes[i].deps[0]].value.clone().unwrap(), None));
-                    nodes[i].value_for_grad = [nodes[nodes[i].deps[0]].value.clone(), None];
-                }
-                else {
-                    // We have a binary operator
-                    let func = nodes[i].function.as_ref().unwrap();
-                    nodes[i].value =
-                        Some(func.forward(&nodes[nodes[i].deps[0]].value.clone().unwrap(), Some(&nodes[nodes[i].deps[1]].value.clone().unwrap())));
-                    nodes[i].value_for_grad = [nodes[nodes[i].deps[0]].value.clone(), nodes[nodes[i].deps[1]].value.clone()];
-
-
-                }
-            }
-        }
-    }
-
-    pub fn grad(&self) -> Grad {
-        let len = self.tape.len();
-        let mut nodes = self.tape.nodes.borrow_mut();
-        let mut derivs = vec![0.0; len];
-        derivs[self.index] = 1.0;
-
-        for i in (0..len).rev() {
-            let node = &mut nodes[i];
-            if node.function.is_some() {
-                let func = node.function.as_ref().unwrap();
-                let first = &node.value_for_grad[0].clone().unwrap();
-                let second = node.value_for_grad[1].as_ref();
-                node.weights = Some(func.backward(first, second));
-            }
-            let deriv = derivs[i];
-            for j in 0..2 {
-                match node.weights.clone().unwrap() {
-                    RawTensor::CPU(x) => derivs[node.deps[j]] += x[j] * deriv
-                }
-            }
-        }
-        Grad { derivs }
-    }
-
-    pub fn sin(self) -> Self {
-        let mut nodes = self.tape.nodes.borrow_mut();
-        let len = nodes.len();
-
-        nodes.push(Node {
-            value: None,
-            value_for_grad: [None, None],
-            function: Some(Box::new(Sin {})),
-            weights: None,
-            deps: [self.index, len],
-            forward: false,
-        });
-
-        Tensor {
-            tape: self.tape,
-            index: len,
-        }
-    }
-
-    pub fn sum(self) -> Self {
-        let mut nodes = self.tape.nodes.borrow_mut();
-        let len = nodes.len();
-
-        nodes.push(Node {
-            value: None,
-            value_for_grad: [None, None],
-            function: Some(Box::new(Sum {})),
-            weights: None,
-            deps: [self.index, len],
-            forward: false,
-        });
-
-        Tensor {
-            tape: self.tape,
-            index: len,
-        }
-    }
-
-    pub fn dot(self, other: Tensor<'t>) -> Self {
-        assert_eq!(self.tape as *const Tape, other.tape as *const Tape);
-        let mut nodes = self.tape.nodes.borrow_mut();
-        let len = nodes.len();
-
-        nodes.push(Node {
-            value: None,
-            value_for_grad: [None, None],
-            function: Some(Box::new(Dot {})),
-            weights: None,
-            deps: [self.index, other.index],
-            forward: false,
-        });
-
-        Tensor {
-            tape: self.tape,
-            index: len,
-        }
-    }
-}
-
-pub struct Tape {
+pub struct Graph {
     nodes: RefCell<Vec<Node>>,
-    device: Devices,
+    device: Device,
 }
 
-#[test]
-fn simple_test() {
-    let t = Tape::new(Devices::CPU);
-    let arr : ArrayD<f64> = Array::eye(3).into_dyn();
-    println!("{:?}", arr);
-    let x = t.tensor(Array::eye(3).into_dyn());
-    let y = t.tensor(array![2., 0., -2.].into_dyn());
-    let z = x.dot(y);
-    z.compute();
-    let grad = z.grad();
-    println!("--------------");
-    println!("{:?}", grad.wrt(x));
-    println!("{:?}", grad.wrt(y));
-    println!("{:?}", grad.wrt(z));
-    println!("----");
-    println!("{:?}", x.value());
-    println!("{:?}", y.value());
-    println!("{:?}", z.value());
-}
-
-impl Tape {
-    pub fn new(device: Devices) -> Self {
-        Tape {
+impl Graph {
+    ///
+    /// Create a new graph and specify where to store; CPU or GPU
+    ///
+    pub fn new(device: Device) -> Self {
+        Graph {
             nodes: RefCell::new(Vec::new()),
             device,
         }
@@ -283,34 +86,99 @@ impl Tape {
         self.nodes.borrow().len()
     }
 
-    pub fn tensor<'t>(&'t self, ndarray: ArrayD<f64>) -> Tensor<'t> {
-        let x = Rc::new(ndarray);
-
+    pub fn tensor<'g>(&'g self, value: ndarray::ArrayD<f64>) -> Tensor<'g> {
         let mut nodes = self.nodes.borrow_mut();
         let len = nodes.len();
 
-        nodes.push(Node {
-            value: Some(RawTensor::CPU(x.clone())),
-            value_for_grad: [Some(RawTensor::CPU(x.clone())), None],
-            function: None,
-            weights: Some(RawTensor::CPU(Rc::new(ArrayD::zeros(x.shape())))),
-            deps: [len, len],
-            forward: true,
-        });
+        let value = match &self.device {
+            Device::CPU => TensorData::CPU(CPUData::new(value)),
+            Device::GPU => todo!(),
+        };
 
+        nodes.push(Node {
+            deps: [len, len],
+            func: Function::None,
+            value: Some(value),
+        });
         Tensor {
-            tape: self,
+            graph: self,
             index: len,
         }
     }
 }
 
-pub struct Grad {
-    pub derivs: Vec<f64>,
+impl fmt::Debug for Graph {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut node_string = String::new();
+        for node in &*self.nodes.borrow() {
+            node_string.push_str(format!("{:?}, ", node.deps).as_str());
+        }
+        write!(f, "{}", node_string)
+    }
 }
 
-impl Grad {
-    pub fn wrt<'t>(&self, var: Tensor<'t>) -> f64 {
-        self.derivs[var.index]
+#[derive(Clone, Copy)]
+pub struct Tensor<'g> {
+    graph: &'g Graph,
+    index: usize,
+}
+
+impl<'g> Tensor<'g> {
+    ///
+    /// Returns a copy of the data represented by the tensor
+    ///
+    pub fn value(&self) -> ndarray::ArrayD<f64> {
+        let nodes = self.graph.nodes.borrow();
+        let val = nodes[self.index]
+            .value
+            .as_ref()
+            .expect("Was forward called?");
+
+        match val {
+            TensorData::CPU(x) => ndarray::ArrayD::clone(x.value()),
+            TensorData::GPU(_x) => todo!(),
+        }
+    }
+
+    ///
+    /// Do a forward pass stopping at the current node
+    ///
+    /// TODO: this should ideally only flow through nodes that matter
+    ///
+    pub fn forward(&self) {
+        let mut nodes = self.graph.nodes.borrow_mut();
+
+        for i in 0..self.index + 1 {
+            match &nodes[i].func {
+                Function::None => (),
+                Function::One(f) => todo!(),
+                Function::Two(f) => {
+                    let n_l = nodes[nodes[i].deps[0]].value.unwrap();
+                    let n_r = nodes[nodes[i].deps[1]].value.unwrap();
+                    nodes[i].value = Some(f.forward(n_l, n_r));
+                }
+            }
+        }
+    }
+}
+
+impl<'g> ::std::ops::Add for Tensor<'g> {
+    type Output = Tensor<'g>;
+    fn add(self, other: Tensor<'g>) -> Self::Output {
+        assert_eq!(self.graph as *const Graph, other.graph as *const Graph);
+        let mut nodes = self.graph.nodes.borrow_mut();
+
+        let len = nodes.len();
+
+        use crate::functions::Add;
+        nodes.push(Node {
+            deps: [self.index, other.index],
+            func: Function::Two(Box::new(Add)),
+            value: None,
+        });
+        Tensor {
+            graph: self.graph,
+            index: len,
+        }
     }
 }

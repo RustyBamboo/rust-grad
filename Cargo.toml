@@ -8,3 +8,7 @@ edition = "2018"
 
 [dependencies]
 ndarray = {git = "https://github.com/rust-ndarray/ndarray", rev="307234e"}
+
+[[bin]]
+name = "optimize"
+path = "src/bin.rs"
