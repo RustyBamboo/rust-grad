@@ -267,12 +267,12 @@ impl<'g> Tensor<'g> {
                     };
                     if let Some(w) = node.get_cpu_ctx()[j] {
                         unsafe {
-                            *grad = &*grad + w * local_grad;
+                            *grad = &*grad + w;
                         }
                     }
                 } else {
                     if let Some(w) = node.get_cpu_ctx()[j] {
-                        node_d.grad = Some(TensorData::CPU(CPUData::new(w * local_grad)));
+                        node_d.grad = Some(TensorData::CPU(CPUData::new(ndarray::Array::clone(w))));
                     }
                 }
             }

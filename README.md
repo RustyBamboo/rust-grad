@@ -2,7 +2,7 @@
 
 Implement an automatic differentiation for scalars and tensors in Rust.
 
-## Example
+### Example
 
 ```rust
 use rust_grad::tensor as t;
@@ -21,12 +21,26 @@ pub fn main() {
 
     z.backward(); // backward pass
 
-    println!("dz/dz {}", z.grad());
-    println!("dz/dx {}", x.grad());
-    println!("dz/dy {}", y.grad());
+    println!("dz/dz {}", z.grad()); // dz/dz [1,1]
+    println!("dz/dx {}", x.grad()); // dz/dx [5,8]
+    println!("dz/dy {}", y.grad()); // dz/dy [1,2]
 
     println!("Graph: {:?}", graph);
 }
+```
+
+### Same Example in Torch
+
+```python
+import torch
+
+x = torch.tensor([1.0, 2.0], requires_grad=True)
+y = torch.tensor([3.0, 4.0], requires_grad=True)
+z = (x + y) * x
+z.backward(torch.ones_like(x))
+
+print(x.grad)  # dz/dx tensor([5., 8.])
+print(y.grad)  # dz/dy tensor([1., 2.])
 ```
             
 ## Goals and TODOs
