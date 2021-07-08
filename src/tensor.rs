@@ -212,12 +212,15 @@ impl<'g> Tensor<'g> {
 
         for i in 0..self.index + 1 {
             let mut node = nodes[i].borrow_mut();
-            match &node.func {
+            let d_0 = node.deps[0];
+            let d_1 = node.deps[1];
+            match &mut node.func {
                 Function::None => (),
                 Function::One(f) => todo!(),
                 Function::Two(f) => {
-                    let n_l = nodes[node.deps[0]].borrow().value.unwrap();
-                    let n_r = nodes[node.deps[1]].borrow().value.unwrap();
+                    
+                    let n_l = nodes[d_0].borrow().value.unwrap();
+                    let n_r = nodes[d_1].borrow().value.unwrap();
                     node.value = Some(f.forward(n_l, n_r));
                 }
             }
@@ -289,6 +292,29 @@ impl<'g> ::std::ops::Add for Tensor<'g> {
         nodes.push(RefCell::new(Node {
             deps: [self.index, other.index],
             func: Function::Two(Box::new(Add)),
+            value: None,
+            grad: None,
+            ctx: [None, None],
+        }));
+        Tensor {
+            graph: self.graph,
+            index: len,
+        }
+    }
+}
+
+impl<'g> ::std::ops::Mul for Tensor<'g> {
+    type Output = Tensor<'g>;
+    fn mul(self, other: Tensor<'g>) -> Self::Output {
+        assert_eq!(self.graph as *const Graph, other.graph as *const Graph);
+        let mut nodes = self.graph.nodes.borrow_mut();
+
+        let len = nodes.len();
+
+        use crate::functions::Mul;
+        nodes.push(RefCell::new(Node {
+            deps: [self.index, other.index],
+            func: Function::Two(Box::new(Mul{x_ctx: None, y_ctx: None})),
             value: None,
             grad: None,
             ctx: [None, None],
