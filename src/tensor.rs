@@ -12,7 +12,8 @@ pub struct GPUData<T: ?Sized> {
 
 #[derive(Clone, Copy)]
 pub struct CPUData {
-    pub value: *const ndarray::ArrayD<f64>,
+    //TODO: Drop the memory when done??
+    pub value: *mut ndarray::ArrayD<f64>,
 }
 
 impl CPUData {
@@ -56,18 +57,68 @@ struct Node {
     deps: [usize; 2],
     func: Function,
     value: Option<TensorData>,
+    grad: Option<TensorData>,
+    ctx: [Option<TensorData>; 2],
+}
+
+impl Node {
+    fn get_cpu_data(&self) -> &ndarray::ArrayD<f64> {
+        let value = self.value.as_ref().unwrap();
+        match value {
+            TensorData::CPU(x) => x.value(),
+            TensorData::GPU(_) => todo!(),
+        }
+    }
+
+    fn get_cpu_grad_data(&self) -> &ndarray::ArrayD<f64> {
+        let value = self.grad.as_ref().unwrap();
+        match value {
+            TensorData::CPU(x) => x.value(),
+            TensorData::GPU(_) => todo!(),
+        }
+    }
+
+    fn get_cpu_ctx(&self) -> [Option<&ndarray::ArrayD<f64>>; 2] {
+        let mut out1 = None;
+        let mut out2 = None;
+        if let Some(a) = self.ctx[0].as_ref() {
+            match a {
+                TensorData::CPU(x) => out1 = Some(x.value()),
+                TensorData::GPU(_) => todo!(),
+            }
+        }
+        if let Some(a) = self.ctx[1].as_ref() {
+            match a {
+                TensorData::CPU(x) => out2 = Some(x.value()),
+                TensorData::GPU(_) => todo!(),
+            }
+        }
+
+        [out1, out2]
+    }
+}
+
+impl fmt::Debug for Node {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let node_string = format!("{:?}", self.deps);
+
+        write!(f, "{}", node_string)
+    }
 }
 
 ///
 /// The Computational graph or Wengert list
 ///
-/// We want several instances to be able to push to the node list, hence RefCell
+/// We want several instances to be able to push to the node list, hence RefCell<Vec>>
 /// It may be possible to allow construction in several threads via a RwLock,
 /// but for now we assume single-threaded construction of the graph
 ///
+/// In addition, we have cases where we need to borrow the contents of a Node struct both mutably
+/// and immutably, so we wrap it with a RefCell.
+///
 
 pub struct Graph {
-    nodes: RefCell<Vec<Node>>,
+    nodes: RefCell<Vec<RefCell<Node>>>,
     device: Device,
 }
 
@@ -95,11 +146,13 @@ impl Graph {
             Device::GPU => todo!(),
         };
 
-        nodes.push(Node {
+        nodes.push(RefCell::new(Node {
             deps: [len, len],
             func: Function::None,
             value: Some(value),
-        });
+            grad: None,
+            ctx: [None, None],
+        }));
         Tensor {
             graph: self,
             index: len,
@@ -111,7 +164,7 @@ impl fmt::Debug for Graph {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut node_string = String::new();
         for node in &*self.nodes.borrow() {
-            node_string.push_str(format!("{:?}, ", node.deps).as_str());
+            node_string.push_str(format!("{:?}, ", node.borrow().deps).as_str());
         }
         write!(f, "{}", node_string)
     }
@@ -129,10 +182,19 @@ impl<'g> Tensor<'g> {
     ///
     pub fn value(&self) -> ndarray::ArrayD<f64> {
         let nodes = self.graph.nodes.borrow();
-        let val = nodes[self.index]
-            .value
-            .as_ref()
-            .expect("Was forward called?");
+        let node = nodes[self.index].borrow();
+        let val = node.value.as_ref().expect("Was forward called?");
+
+        match val {
+            TensorData::CPU(x) => ndarray::ArrayD::clone(x.value()),
+            TensorData::GPU(_x) => todo!(),
+        }
+    }
+
+    pub fn grad(&self) -> ndarray::ArrayD<f64> {
+        let nodes = self.graph.nodes.borrow();
+        let node = nodes[self.index].borrow();
+        let val = node.grad.as_ref().expect("Was backward called?");
 
         match val {
             TensorData::CPU(x) => ndarray::ArrayD::clone(x.value()),
@@ -149,13 +211,66 @@ impl<'g> Tensor<'g> {
         let mut nodes = self.graph.nodes.borrow_mut();
 
         for i in 0..self.index + 1 {
-            match &nodes[i].func {
+            let mut node = nodes[i].borrow_mut();
+            match &node.func {
                 Function::None => (),
                 Function::One(f) => todo!(),
                 Function::Two(f) => {
-                    let n_l = nodes[nodes[i].deps[0]].value.unwrap();
-                    let n_r = nodes[nodes[i].deps[1]].value.unwrap();
-                    nodes[i].value = Some(f.forward(n_l, n_r));
+                    let n_l = nodes[node.deps[0]].borrow().value.unwrap();
+                    let n_r = nodes[node.deps[1]].borrow().value.unwrap();
+                    node.value = Some(f.forward(n_l, n_r));
+                }
+            }
+        }
+    }
+
+    pub fn backward(&self) {
+        let len = self.graph.len();
+        let nodes = self.graph.nodes.borrow();
+
+        {
+            let mut node = nodes[self.index].borrow_mut();
+
+            let dim = node.get_cpu_data().raw_dim();
+            //TODO: GPU
+
+            // Fill in first grad with ones
+            node.grad = Some(TensorData::CPU(CPUData::new(ndarray::Array::ones(dim))));
+        }
+        for i in (0..len).rev() {
+            {
+                let mut node = nodes[i].borrow_mut();
+
+                match &node.func {
+                    Function::None => (),
+                    Function::One(f) => todo!(),
+                    Function::Two(f) => node.ctx = f.backward(node.grad.unwrap()),
+                }
+            }
+
+            let node = nodes[i].borrow();
+
+            for j in 0..2 {
+                let local_grad = node.get_cpu_grad_data();
+                if std::ptr::eq(&*node, nodes[node.deps[j]].as_ptr()) {
+                    continue;
+                }
+                let mut node_d = nodes[node.deps[j]].borrow_mut();
+
+                if let Some(grad) = node_d.grad.as_ref() {
+                    let grad = match grad {
+                        TensorData::CPU(x) => x.value,
+                        TensorData::GPU(_) => todo!(),
+                    };
+                    if let Some(w) = node.get_cpu_ctx()[j] {
+                        unsafe {
+                            *grad = &*grad + w * local_grad;
+                        }
+                    }
+                } else {
+                    if let Some(w) = node.get_cpu_ctx()[j] {
+                        node_d.grad = Some(TensorData::CPU(CPUData::new(w * local_grad)));
+                    }
                 }
             }
         }
@@ -171,11 +286,13 @@ impl<'g> ::std::ops::Add for Tensor<'g> {
         let len = nodes.len();
 
         use crate::functions::Add;
-        nodes.push(Node {
+        nodes.push(RefCell::new(Node {
             deps: [self.index, other.index],
             func: Function::Two(Box::new(Add)),
             value: None,
-        });
+            grad: None,
+            ctx: [None, None],
+        }));
         Tensor {
             graph: self.graph,
             index: len,

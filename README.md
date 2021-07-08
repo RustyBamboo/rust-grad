@@ -5,31 +5,38 @@ Implement an automatic differentiation for scalars and tensors in Rust.
 ## Example
 
 ```rust
-use tensor::Tape;
+use rust_grad::tensor as t;
 
-let t = Tape::new(Devices::CPU);
+pub fn main() {
+    let graph = t::Graph::new(t::Device::CPU);
 
-let x = t.tensor(4.);
+    let x = graph.tensor(ndarray::arr1(&[1.0, 2.0]).into_dyn());
+    let y = graph.tensor(ndarray::arr1(&[3.0, 4.0]).into_dyn());
 
-let y = x.sin();
-let z = y.sin();
+    let z = x + y;
+    let w = z + x;
 
-z.compute(); // Invoke the lazy execution
+    w.forward(); // forward pass
+    
+    println!("{}", w.value());
 
-let grad = z.grad(); // get gradients
+    w.backward(); // backward pass
 
-println!("dz/dx {}", grad.wrt(x)); // -0.47522187563
-println!("dz/dy {}", grad.wrt(y)); // 0.72703513116
-println!("dz/dz {}", grad.wrt(z)); // 1.0
+    println!("dw/dw {}", w.grad());
+    println!("dw/dz {}", z.grad());
+    println!("dw/dx {}", x.grad());
+    println!("dw/dy {}", y.grad());
 
-println!("z = {}", z.value());
+    println!("Graph: {:?}", graph);
+}
 
 ```
             
 ## Goals and TODOs
 
 - [x] Scalars
-- [ ] Tensors 
-- [x] Lazy execution (via `tensor.compute()` and `tensor.grad()`
-- [ ] CPU support through `ndarray` 
+- [x] Tensors 
+- [ ] Many supported Functions 
+- [x] Lazy execution (via `tensor.backward()` and `tensor.forward()`
+- [x] CPU support through `ndarray` 
 - [ ] GPU support through Vulkan

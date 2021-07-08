@@ -19,7 +19,7 @@ pub trait OneValuedFn {
 
 pub trait TwoValuedFn {
     fn forward(&self, t_a: TensorData, t_b: TensorData) -> TensorData;
-    fn backward(&self, t_a: TensorData, t_b: TensorData);
+    fn backward(&self, grad: TensorData) -> [Option<TensorData>; 2];
 }
 
 ///
@@ -42,7 +42,7 @@ impl TwoValuedFn for Add {
 
         TensorData::CPU(t_c)
     }
-    fn backward(&self, t_a: TensorData, t_b: TensorData) {
-        todo!()
+    fn backward(&self, grad: TensorData) -> [Option<TensorData>; 2] {
+        [Some(grad), Some(grad)]
     }
 }
