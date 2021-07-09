@@ -70,14 +70,6 @@ impl Node {
         }
     }
 
-    fn get_cpu_grad_data(&self) -> &ndarray::ArrayD<f64> {
-        let value = self.grad.as_ref().unwrap();
-        match value {
-            TensorData::CPU(x) => x.value(),
-            TensorData::GPU(_) => todo!(),
-        }
-    }
-
     fn get_cpu_ctx(&self) -> [Option<&ndarray::ArrayD<f64>>; 2] {
         let mut out1 = None;
         let mut out2 = None;
@@ -208,7 +200,7 @@ impl<'g> Tensor<'g> {
     /// TODO: this should ideally only flow through nodes that matter
     ///
     pub fn forward(&self) {
-        let mut nodes = self.graph.nodes.borrow_mut();
+        let nodes = self.graph.nodes.borrow_mut();
 
         for i in 0..self.index + 1 {
             let mut node = nodes[i].borrow_mut();
@@ -216,7 +208,7 @@ impl<'g> Tensor<'g> {
             let d_1 = node.deps[1];
             match &mut node.func {
                 Function::None => (),
-                Function::One(f) => todo!(),
+                Function::One(_f) => todo!(),
                 Function::Two(f) => {
                     
                     let n_l = nodes[d_0].borrow().value.unwrap();
@@ -246,7 +238,7 @@ impl<'g> Tensor<'g> {
 
                 match &node.func {
                     Function::None => (),
-                    Function::One(f) => todo!(),
+                    Function::One(_f) => todo!(),
                     Function::Two(f) => node.ctx = f.backward(node.grad.unwrap()),
                 }
             }
@@ -254,7 +246,6 @@ impl<'g> Tensor<'g> {
             let node = nodes[i].borrow();
 
             for j in 0..2 {
-                let local_grad = node.get_cpu_grad_data();
                 if std::ptr::eq(&*node, nodes[node.deps[j]].as_ptr()) {
                     continue;
                 }
@@ -276,6 +267,25 @@ impl<'g> Tensor<'g> {
                     }
                 }
             }
+        }
+    }
+
+    pub fn matmul(self, other: Tensor<'g>) -> Tensor<'g> {
+        let mut nodes = self.graph.nodes.borrow_mut();
+
+        let len = nodes.len();
+
+        use crate::functions::MatMul;
+        nodes.push(RefCell::new(Node {
+            deps: [self.index, other.index],
+            func: Function::Two(Box::new(MatMul{x_ctx: None, y_ctx: None})),
+            value: None,
+            grad: None,
+            ctx: [None, None],
+        }));
+        Tensor {
+            graph: self.graph,
+            index: len,
         }
     }
 }
@@ -325,3 +335,5 @@ impl<'g> ::std::ops::Mul for Tensor<'g> {
         }
     }
 }
+
+

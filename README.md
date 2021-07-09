@@ -2,7 +2,9 @@
 
 Implement an automatic differentiation for scalars and tensors in Rust.
 
-### Example
+## Examples
+
+### Element-wise Operation
 
 ```rust
 use rust_grad::tensor as t;
@@ -29,7 +31,7 @@ pub fn main() {
 }
 ```
 
-### Same Example in Torch
+#### Same Example in Torch
 
 ```python
 import torch
@@ -41,6 +43,53 @@ z.backward(torch.ones_like(x))
 
 print(x.grad)  # dz/dx tensor([5., 8.])
 print(y.grad)  # dz/dy tensor([1., 2.])
+```
+
+### Matrix Multiply
+
+```rust
+use rust_grad::tensor as t;
+
+pub fn main() {
+    let graph = t::Graph::new(t::Device::CPU);
+
+    let x = graph.tensor(ndarray::array![[1.0, 2.0, 3.0],
+                                         [4.0, 5.0, 6.0],
+                                         [7.0, 8.0, 9.0]].into_dyn());
+    let y = graph.tensor(ndarray::array![[1.0, 2.0, 1.0],
+                                         [2.0, 3.0, 2.0],
+                                         [3.0, 4.0, 3.0]].into_dyn());
+
+    let z = x.matmul(y);
+
+    z.forward(); // forward pass
+    
+    println!("{}", z.value());
+
+    z.backward(); // backward pass
+
+    println!("dz/dx {}", x.grad());
+    println!("dz/dy {}", y.grad());
+}
+```
+
+#### Same Example in Torch
+
+```python
+import torch
+
+x = torch.tensor([[1.0, 2.0, 3.0],
+                  [4.0, 5.0, 6.0],
+                  [7.0, 8.0, 9.0]], requires_grad=True)
+y = torch.tensor([[1.0, 2.0, 1.0],
+                  [2.0, 3.0, 2.0],
+                  [3.0, 4.0, 3.0]], requires_grad=True)
+z = x.matmul(y)
+print(z)
+z.backward(torch.ones_like(x))
+
+print(f"dz/dx {x.grad}")  # dz/dx
+print(f"dz/dy {y.grad}")  # dz/dy
 ```
             
 ## Goals and TODOs
