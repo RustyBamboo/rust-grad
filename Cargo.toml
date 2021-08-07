@@ -8,8 +8,9 @@ edition = "2018"
 
 [dependencies]
 # ndarray = {git = "https://github.com/rust-ndarray/ndarray", rev="307234e"}
-ndarray = "0.15"
-ndarray_einsum_beta = "0.7.0"
+# ndarray = "0.15"
+ndarray = { path = "../ndarray" }
+# ndarray_einsum_beta = "0.7.0"
 
 [[bin]]
 name = "optimize"
