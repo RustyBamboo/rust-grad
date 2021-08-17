@@ -11,6 +11,7 @@ edition = "2018"
 # ndarray = "0.15"
 ndarray = { path = "../ndarray" }
 # ndarray_einsum_beta = "0.7.0"
+futures = "*"
 
 [[bin]]
 name = "optimize"

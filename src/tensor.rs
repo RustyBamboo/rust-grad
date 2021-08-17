@@ -1,48 +1,85 @@
 use std::cell::RefCell;
 use std::fmt;
 use std::marker::PhantomData;
-use std::rc::Rc;
 
-use ndarray::{Array, Dim, IxDyn, IxDynImpl, NdProducer, WgpuArray};
+use ndarray::{Array, IxDyn, WgpuArray};
 
 use crate::functions::Function;
 
-// Trait for types that are supported
+///
+/// The base trait for Tensor objects
+///
 pub trait TensorType {
-    fn get_value_cpu(self) -> Array<f32, IxDyn>;
-    fn ones(shape: Dim<IxDynImpl>) -> Self;
+    fn get_value_cpu(&self) -> Array<f32, IxDyn>;
     fn tensor(&self) -> &Self;
+    fn add(&self, other: &Self) -> Self;
+    fn mul(&self, other: &Self) -> Self;
 }
 impl TensorType for Array<f32, IxDyn> {
-    fn get_value_cpu(self) -> Array<f32, IxDyn> {
-        self
-    }
-    fn ones(shape: Dim<IxDynImpl>) -> Self {
-        //Self::ones(shape)
-        todo!()
+    fn get_value_cpu(&self) -> Array<f32, IxDyn> {
+        self.clone()
     }
     fn tensor(&self) -> &Self {
         self
     }
+    fn add(&self, other: &Self) -> Self {
+        self + other
+    }
+    fn mul(&self, other: &Self) -> Self {
+        self * other
+    }
 }
-impl TensorType for WgpuArray<'static, f32, IxDyn> {
-    fn get_value_cpu(self) -> Array<f32, IxDyn> {
-        self.into_cpu()
+impl TensorType for WgpuArray<'_, f32, IxDyn> {
+    fn get_value_cpu(&self) -> Array<f32, IxDyn> {
+        self.clone().into_cpu()
     }
 
-    fn ones(shape: Dim<IxDynImpl>) -> Self {
-        todo!()
-        //Self::ones(shape)
-    }
     fn tensor(&self) -> &Self {
         self
     }
+    fn add(&self, other: &Self) -> Self {
+        self + other
+    }
+    fn mul(&self, other: &Self) -> Self {
+        self * other
+    }
 }
 
-pub enum Device {
-    CPU,
-    GPU,
+///
+/// Rust doesn't have an easy way to deal with cyclic pointers.
+/// So this Raw struct exposes unsafe code
+/// TODO: Look into Rc/Weak
+///
+pub struct Raw<'g, T: TensorType> {
+    pub data: *mut T,
+    _marker: PhantomData<&'g ()>
 }
+
+impl<'g, T: TensorType> Raw<'g, T> {
+    pub fn new(data: T) -> Self {
+        let data = Box::new(data);
+        let data = Box::into_raw(data);
+        Raw { data, _marker: PhantomData }
+    }
+
+    pub fn value(&self) -> &T {
+        //TODO: Manually drop memory?
+        unsafe { &*self.data }
+    }
+
+    pub fn get_box(&self) -> Box<T> {
+        unsafe { Box::from_raw(self.data) }
+    }
+}
+
+impl<'g, T: TensorType> Copy for Raw<'g, T> {}
+
+impl<'g, T: TensorType> Clone for Raw<'g, T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
 
 ///
 /// Represents a node in a Wengert list
@@ -51,36 +88,15 @@ pub enum Device {
 /// The Function enum indicates the func to apply to the value in a forward pass
 ///
 
-struct Node<T: TensorType> {
+struct Node<'g, T: TensorType> {
     deps: [usize; 2],
-    func: Function<T>,
-    value: Option<Rc<RefCell<T>>>,
-    grad: Option<Rc<RefCell<T>>>,
-    ctx: [Option<Rc<RefCell<T>>>; 2],
+    func: Function<'g, T>,
+    value: Option<Raw<'g, T>>,
+    grad: Option<Raw<'g, T>>,
+    ctx: [Option<Raw<'g, T>>; 2],
 }
 
-impl<T: TensorType> Node<T> {
-    //    fn get_cpu_data(&self) -> &ndarray::ArrayD<f32> {
-    //        let value = self.value.unwrap();
-    //        unsafe { &(*value).get_value() }
-    //
-    //    }
-    //
-    //    fn get_cpu_ctx(&self) -> [Option<&ndarray::ArrayD<f32>>; 2] {
-    //        let mut out1 = None;
-    //        let mut out2 = None;
-    //        if let Some(a) = self.ctx[0] {
-    //            out1 = Some(unsafe { &(*a).get_value() } )
-    //        }
-    //        if let Some(a) = self.ctx[1] {
-    //            out2 = Some(unsafe { &(*a).get_value() } )
-    //        }
-    //
-    //        [out1, out2]
-    //    }
-}
-
-impl<T: TensorType> fmt::Debug for Node<T> {
+impl<'g, T: TensorType> fmt::Debug for Node<'g, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let node_string = format!("{:?}", self.deps);
 
@@ -99,19 +115,17 @@ impl<T: TensorType> fmt::Debug for Node<T> {
 /// and immutably, so we wrap it with a RefCell.
 ///
 
-pub struct Graph<T: TensorType> {
-    nodes: RefCell<Vec<RefCell<Node<T>>>>,
-    device: Device,
+pub struct Graph<'g, T: TensorType> {
+    nodes: RefCell<Vec<RefCell<Node<'g, T>>>>,
 }
 
-impl<T: TensorType> Graph<T> {
+impl<'g, T: TensorType> Graph<'g, T> {
     ///
-    /// Create a new graph and specify where to store; CPU or GPU
+    /// Create a new graph to store the computations
     ///
-    pub fn new(device: Device) -> Self {
+    pub fn new() -> Self {
         Graph {
             nodes: RefCell::new(Vec::new()),
-            device,
         }
     }
 
@@ -119,11 +133,14 @@ impl<T: TensorType> Graph<T> {
         self.nodes.borrow().len()
     }
 
-    pub fn tensor<'g>(&'g self, value: T) -> Tensor<'g, T> {
+    ///
+    /// Create a Tensor object which takes ownership of a TensorType
+    ///
+    pub fn tensor(&'g self, value: T) -> Tensor<'g, T> {
         let mut nodes = self.nodes.borrow_mut();
         let len = nodes.len();
 
-        let value = Rc::new(RefCell::new(value));
+        let value = Raw::new(value);
 
         nodes.push(RefCell::new(Node {
             deps: [len, len],
@@ -139,7 +156,7 @@ impl<T: TensorType> Graph<T> {
     }
 }
 
-impl<T: TensorType> fmt::Debug for Graph<T> {
+impl<'g, T: TensorType> fmt::Debug for Graph<'g, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut node_string = String::new();
         for node in &*self.nodes.borrow() {
@@ -149,30 +166,50 @@ impl<T: TensorType> fmt::Debug for Graph<T> {
     }
 }
 
-#[derive(Clone, Copy)]
+///
+/// A Tensor struct which hold a reference to the rest of the computational graph
+/// as well as an index of where it is on the graph
+///
+/// Tensors are created through the Graph:
+///
+/// ```
+/// let g = Graph::new();
+/// let t = g.tensor(...);
+/// ```
+///
 pub struct Tensor<'g, T: TensorType> {
-    graph: &'g Graph<T>,
+    graph: &'g Graph<'g, T>,
     index: usize,
 }
 
-impl<'g, T: NdProducer<Dim = Dim<IxDynImpl>> + TensorType + Clone + std::ops::Add<Output = T>>
-    Tensor<'g, T>
-{
+impl<T: TensorType> Copy for Tensor<'_, T> {}
+
+impl<T: TensorType> Clone for Tensor<'_, T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T: TensorType + Clone> Tensor<'_, T> {
     ///
-    /// Returns a copy of the data represented by the tensor
+    /// Returns a CPU copy of the data represented by the Tensor
     ///
     pub fn value(&self) -> ndarray::ArrayD<f32> {
         let nodes = self.graph.nodes.borrow();
         let node = nodes[self.index].borrow();
-        let val = node.value.expect("Was forward called?");
-        val.borrow().get_value_cpu()
+        let val = node.value.as_ref().expect("Was forward called?");
+
+        val.value().get_value_cpu()
     }
 
+    ///
+    /// Returns a CPU copy of the gradient
+    ///
     pub fn grad(&self) -> ndarray::ArrayD<f32> {
         let nodes = self.graph.nodes.borrow();
         let node = nodes[self.index].borrow();
-        let val = node.grad.expect("Was backward called?");
-        val.borrow().get_value_cpu()
+        let val = node.grad.as_ref().expect("Was backward called?");
+        val.value().get_value_cpu()
     }
 
     ///
@@ -191,26 +228,29 @@ impl<'g, T: NdProducer<Dim = Dim<IxDynImpl>> + TensorType + Clone + std::ops::Ad
                 Function::None => (),
                 Function::One(_f) => todo!(),
                 Function::Two(f) => {
-                    let n_l = nodes[d_0].borrow().value.unwrap();
-                    let n_r = nodes[d_1].borrow().value.unwrap();
+                    let n_l: Raw<T> = nodes[d_0].borrow().value.clone().unwrap();
+                    let n_r: Raw<T> = nodes[d_1].borrow().value.clone().unwrap();
                     node.value = Some(f.forward(n_l, n_r));
                 }
             }
         }
     }
 
-    pub fn backward(&self) {
+    ///
+    /// A backward pass to compute the gradients.
+    ///
+    /// An initial gradient is required, and in typical applications is usually
+    /// all ones
+    ///
+    pub fn backward(&self, init: T) {
         let len = self.graph.len();
         let nodes = self.graph.nodes.borrow();
 
         {
             let mut node = nodes[self.index].borrow_mut();
-
-            let dim = node.value.unwrap().borrow().tensor().raw_dim();
-
-            // Fill in first grad with ones
-            node.grad = Some(Rc::new(RefCell::new(T::ones(dim))));
+            node.grad = Some(Raw::new(init));
         }
+
         for i in (0..len).rev() {
             {
                 let mut node = nodes[i].borrow_mut();
@@ -218,6 +258,7 @@ impl<'g, T: NdProducer<Dim = Dim<IxDynImpl>> + TensorType + Clone + std::ops::Ad
                 match &node.func {
                     Function::None => (),
                     Function::One(_f) => todo!(),
+                    //Function::Two(_f) => todo!(),
                     Function::Two(f) => node.ctx = f.backward(node.grad.clone().unwrap()),
                 }
             }
@@ -230,16 +271,16 @@ impl<'g, T: NdProducer<Dim = Dim<IxDynImpl>> + TensorType + Clone + std::ops::Ad
                 }
                 let mut node_d = nodes[node.deps[j]].borrow_mut();
 
-                if let Some(grad) = node_d.grad {
-                    if let Some(w) = node.ctx[j] {
+                if let Some(grad) = &node_d.grad {
+                    if let Some(w) = &node.ctx[j] {
                         unsafe {
-                            *grad.borrow_mut() = *grad.borrow() + *w.borrow();
+                            *grad.data = grad.value().add(w.value());
                         }
                     }
                 } else {
-                    //if let Some(w) = node.get_cpu_ctx()[j] {
-                    //node_d.grad = Some(TensorData::CPU(CPUData::new(ndarray::Array::clone(w))));
-                    //}
+                    if let Some(w) = &node.ctx[j] {
+                        node_d.grad = Some(Raw::new(w.value().clone()));
+                    }
                 }
             }
         }
@@ -265,7 +306,7 @@ impl<'g, T: NdProducer<Dim = Dim<IxDynImpl>> + TensorType + Clone + std::ops::Ad
     //}
 }
 
-impl<'g, T: TensorType + std::ops::Add + std::ops::Add<Output = T>> ::std::ops::Add
+impl<'g, T: TensorType> ::std::ops::Add
     for Tensor<'g, T>
 {
     type Output = Tensor<'g, T>;
@@ -293,25 +334,29 @@ impl<'g, T: TensorType + std::ops::Add + std::ops::Add<Output = T>> ::std::ops::
     }
 }
 
-//impl<'g, T: TensorType> ::std::ops::Mul for Tensor<'g, T> {
-//    type Output = Tensor<'g, T>;
-//    fn mul(self, other: Tensor<'g, T>) -> Self::Output {
-//        assert_eq!(self.graph as *const Graph<T>, other.graph as *const Graph<T>);
-//        let mut nodes = self.graph.nodes.borrow_mut();
-//
-//        let len = nodes.len();
-//
-//        use crate::functions::Mul;
-//        nodes.push(RefCell::new(Node {
-//            deps: [self.index, other.index],
-//            func: Function::Two(Box::new(Mul{x_ctx: None, y_ctx: None})),
-//            value: None,
-//            grad: None,
-//            ctx: [None, None],
-//        }));
-//        Tensor {
-//            graph: self.graph,
-//            index: len,
-//        }
-//    }
-//}
+impl<'g, T: TensorType> ::std::ops::Mul for Tensor<'g, T> {
+    type Output = Tensor<'g, T>;
+    fn mul(self, other: Tensor<'g, T>) -> Self::Output {
+        assert_eq!(self.graph as *const Graph<T>, other.graph as *const Graph<T>);
+        let mut nodes = self.graph.nodes.borrow_mut();
+
+        let len = nodes.len();
+
+        let func =Function::Two(Box::new(Mul{x_ctx: None, y_ctx: None, _makrer: PhantomData})); 
+
+        let new_node = Node {
+            deps: [self.index, other.index],
+            func,
+            value: None,
+            grad: None,
+            ctx: [None, None],
+        };
+
+        use crate::functions::Mul;
+        nodes.push(RefCell::new(new_node));
+        Tensor {
+            graph: self.graph,
+            index: len,
+        }
+    }
+}
