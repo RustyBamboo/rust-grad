@@ -50,16 +50,15 @@ impl TensorType for WgpuArray<'_, f32, IxDyn> {
 /// So this Raw struct exposes unsafe code
 /// TODO: Look into Rc/Weak
 ///
-pub struct Raw<'g, T: TensorType> {
+pub struct Raw<T: TensorType> {
     pub data: *mut T,
-    _marker: PhantomData<&'g ()>
 }
 
-impl<'g, T: TensorType> Raw<'g, T> {
+impl<T: TensorType> Raw<T> {
     pub fn new(data: T) -> Self {
         let data = Box::new(data);
         let data = Box::into_raw(data);
-        Raw { data, _marker: PhantomData }
+        Raw { data }
     }
 
     pub fn value(&self) -> &T {
@@ -72,14 +71,13 @@ impl<'g, T: TensorType> Raw<'g, T> {
     }
 }
 
-impl<'g, T: TensorType> Copy for Raw<'g, T> {}
+impl<T: TensorType> Copy for Raw<T> {}
 
-impl<'g, T: TensorType> Clone for Raw<'g, T> {
+impl<T: TensorType> Clone for Raw<T> {
     fn clone(&self) -> Self {
         *self
     }
 }
-
 
 ///
 /// Represents a node in a Wengert list
@@ -88,15 +86,15 @@ impl<'g, T: TensorType> Clone for Raw<'g, T> {
 /// The Function enum indicates the func to apply to the value in a forward pass
 ///
 
-struct Node<'g, T: TensorType> {
+struct Node<'n, T: TensorType> {
     deps: [usize; 2],
-    func: Function<'g, T>,
-    value: Option<Raw<'g, T>>,
-    grad: Option<Raw<'g, T>>,
-    ctx: [Option<Raw<'g, T>>; 2],
+    func: Function<'n, T>,
+    value: Option<Raw<T>>,
+    grad: Option<Raw<T>>,
+    ctx: [Option<Raw<T>>; 2],
 }
 
-impl<'g, T: TensorType> fmt::Debug for Node<'g, T> {
+impl<T: TensorType> fmt::Debug for Node<'_, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let node_string = format!("{:?}", self.deps);
 
@@ -115,11 +113,11 @@ impl<'g, T: TensorType> fmt::Debug for Node<'g, T> {
 /// and immutably, so we wrap it with a RefCell.
 ///
 
-pub struct Graph<'g, T: TensorType> {
-    nodes: RefCell<Vec<RefCell<Node<'g, T>>>>,
+pub struct Graph<'n, T: TensorType> {
+    nodes: RefCell<Vec<RefCell<Node<'n, T>>>>,
 }
 
-impl<'g, T: TensorType> Graph<'g, T> {
+impl<'n, T: TensorType> Graph<'n, T> {
     ///
     /// Create a new graph to store the computations
     ///
@@ -136,7 +134,7 @@ impl<'g, T: TensorType> Graph<'g, T> {
     ///
     /// Create a Tensor object which takes ownership of a TensorType
     ///
-    pub fn tensor(&'g self, value: T) -> Tensor<'g, T> {
+    pub fn tensor<'g>(&'g self, value: T) -> Tensor<'g, 'n, T> {
         let mut nodes = self.nodes.borrow_mut();
         let len = nodes.len();
 
@@ -156,7 +154,7 @@ impl<'g, T: TensorType> Graph<'g, T> {
     }
 }
 
-impl<'g, T: TensorType> fmt::Debug for Graph<'g, T> {
+impl<T: TensorType> fmt::Debug for Graph<'_, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut node_string = String::new();
         for node in &*self.nodes.borrow() {
@@ -177,20 +175,20 @@ impl<'g, T: TensorType> fmt::Debug for Graph<'g, T> {
 /// let t = g.tensor(...);
 /// ```
 ///
-pub struct Tensor<'g, T: TensorType> {
-    graph: &'g Graph<'g, T>,
+pub struct Tensor<'g, 'n, T: TensorType> {
+    graph: &'g Graph<'n, T>,
     index: usize,
 }
 
-impl<T: TensorType> Copy for Tensor<'_, T> {}
+impl<T: TensorType> Copy for Tensor<'_, '_, T> {}
 
-impl<T: TensorType> Clone for Tensor<'_, T> {
+impl<T: TensorType> Clone for Tensor<'_, '_, T> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<T: TensorType + Clone> Tensor<'_, T> {
+impl<T: TensorType + Clone> Tensor<'_, '_, T> {
     ///
     /// Returns a CPU copy of the data represented by the Tensor
     ///
@@ -306,11 +304,9 @@ impl<T: TensorType + Clone> Tensor<'_, T> {
     //}
 }
 
-impl<'g, T: TensorType> ::std::ops::Add
-    for Tensor<'g, T>
-{
-    type Output = Tensor<'g, T>;
-    fn add(self, other: Tensor<'g, T>) -> Self::Output {
+impl<'g, 'n, T: TensorType> ::std::ops::Add for Tensor<'g, 'n, T> {
+    type Output = Tensor<'g, 'n, T>;
+    fn add(self, other: Tensor<'g, 'n, T>) -> Self::Output {
         assert_eq!(
             self.graph as *const Graph<T>,
             other.graph as *const Graph<T>
@@ -334,26 +330,28 @@ impl<'g, T: TensorType> ::std::ops::Add
     }
 }
 
-impl<'g, T: TensorType> ::std::ops::Mul for Tensor<'g, T> {
-    type Output = Tensor<'g, T>;
-    fn mul(self, other: Tensor<'g, T>) -> Self::Output {
-        assert_eq!(self.graph as *const Graph<T>, other.graph as *const Graph<T>);
+impl<'g, 'n, T: 'n + TensorType> ::std::ops::Mul for Tensor<'g, 'n, T> {
+    type Output = Tensor<'g, 'n, T>;
+    fn mul(self, other: Tensor<'g, 'n, T>) -> Self::Output {
+        assert_eq!(
+            self.graph as *const Graph<T>,
+            other.graph as *const Graph<T>
+        );
         let mut nodes = self.graph.nodes.borrow_mut();
 
         let len = nodes.len();
 
-        let func =Function::Two(Box::new(Mul{x_ctx: None, y_ctx: None, _makrer: PhantomData})); 
-
-        let new_node = Node {
+        use crate::functions::Mul;
+        nodes.push(RefCell::new(Node {
             deps: [self.index, other.index],
-            func,
+            func: Function::Two(Box::new(Mul {
+                x_ctx: None,
+                y_ctx: None,
+            })),
             value: None,
             grad: None,
             ctx: [None, None],
-        };
-
-        use crate::functions::Mul;
-        nodes.push(RefCell::new(new_node));
+        }));
         Tensor {
             graph: self.graph,
             index: len,
