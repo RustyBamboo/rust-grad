@@ -1,10 +1,8 @@
+use crate::functions::Function;
+use crate::graph::{Graph, Node};
 use std::cell::RefCell;
-use std::fmt;
-use std::marker::PhantomData;
 
 use ndarray::{Array, IxDyn, WgpuArray};
-
-use crate::functions::Function;
 
 ///
 /// The base trait for Tensor objects
@@ -80,91 +78,6 @@ impl<T: TensorType> Clone for Raw<T> {
 }
 
 ///
-/// Represents a node in a Wengert list
-///
-/// The node can have at most two dependencies on other nodes
-/// The Function enum indicates the func to apply to the value in a forward pass
-///
-
-struct Node<'n, T: TensorType> {
-    deps: [usize; 2],
-    func: Function<'n, T>,
-    value: Option<Raw<T>>,
-    grad: Option<Raw<T>>,
-    ctx: [Option<Raw<T>>; 2],
-}
-
-impl<T: TensorType> fmt::Debug for Node<'_, T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let node_string = format!("{:?}", self.deps);
-
-        write!(f, "{}", node_string)
-    }
-}
-
-///
-/// The Computational graph or Wengert list
-///
-/// We want several instances to be able to push to the node list, hence RefCell<Vec>>
-/// It may be possible to allow construction in several threads via a RwLock,
-/// but for now we assume single-threaded construction of the graph
-///
-/// In addition, we have cases where we need to borrow the contents of a Node struct both mutably
-/// and immutably, so we wrap it with a RefCell.
-///
-
-pub struct Graph<'n, T: TensorType> {
-    nodes: RefCell<Vec<RefCell<Node<'n, T>>>>,
-}
-
-impl<'n, T: TensorType> Graph<'n, T> {
-    ///
-    /// Create a new graph to store the computations
-    ///
-    pub fn new() -> Self {
-        Graph {
-            nodes: RefCell::new(Vec::new()),
-        }
-    }
-
-    fn len(&self) -> usize {
-        self.nodes.borrow().len()
-    }
-
-    ///
-    /// Create a Tensor object which takes ownership of a TensorType
-    ///
-    pub fn tensor<'g>(&'g self, value: T) -> Tensor<'g, 'n, T> {
-        let mut nodes = self.nodes.borrow_mut();
-        let len = nodes.len();
-
-        let value = Raw::new(value);
-
-        nodes.push(RefCell::new(Node {
-            deps: [len, len],
-            func: Function::None,
-            value: Some(value),
-            grad: None,
-            ctx: [None, None],
-        }));
-        Tensor {
-            graph: self,
-            index: len,
-        }
-    }
-}
-
-impl<T: TensorType> fmt::Debug for Graph<'_, T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut node_string = String::new();
-        for node in &*self.nodes.borrow() {
-            node_string.push_str(format!("{:?}, ", node.borrow().deps).as_str());
-        }
-        write!(f, "{}", node_string)
-    }
-}
-
-///
 /// A Tensor struct which hold a reference to the rest of the computational graph
 /// as well as an index of where it is on the graph
 ///
@@ -176,8 +89,8 @@ impl<T: TensorType> fmt::Debug for Graph<'_, T> {
 /// ```
 ///
 pub struct Tensor<'g, 'n, T: TensorType> {
-    graph: &'g Graph<'n, T>,
-    index: usize,
+    pub graph: &'g Graph<'n, T>,
+    pub index: usize,
 }
 
 impl<T: TensorType> Copy for Tensor<'_, '_, T> {}

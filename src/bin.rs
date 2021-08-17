@@ -1,10 +1,10 @@
-use rust_grad::tensor as t;
+use rust_grad::Graph;
 
 use futures::executor::block_on;
 
 pub fn main() {
     let d = block_on(ndarray::WgpuDevice::new()).expect("No GPU");
-    let graph = t::Graph::new();
+    let graph = Graph::new();
 
     let x = ndarray::array![[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]].into_dyn();
     let y = ndarray::array![[1.0, 2.0, 1.0], [2.0, 3.0, 2.0], [3.0, 4.0, 3.0]].into_dyn();
@@ -19,8 +19,6 @@ pub fn main() {
     let y = graph.tensor(y);
 
     let z = x * y;
-
-    //let z = (x.add(y)) * x;
 
     z.forward(); // forward pass
 
