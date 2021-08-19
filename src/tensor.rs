@@ -2,7 +2,7 @@ use crate::functions::Function;
 use crate::graph::{Graph, Node};
 use std::cell::RefCell;
 
-use ndarray::{Array, IxDyn, WgpuArray};
+use ndarray::{Array, Ix2, IxDyn, WgpuArray};
 
 ///
 /// The base trait for Tensor objects
@@ -12,6 +12,8 @@ pub trait TensorType {
     fn tensor(&self) -> &Self;
     fn add(&self, other: &Self) -> Self;
     fn mul(&self, other: &Self) -> Self;
+    fn matmul(&self, other: &Self) -> Self;
+    fn t(&self) -> Self;
 }
 impl TensorType for Array<f32, IxDyn> {
     fn get_value_cpu(&self) -> Array<f32, IxDyn> {
@@ -25,6 +27,22 @@ impl TensorType for Array<f32, IxDyn> {
     }
     fn mul(&self, other: &Self) -> Self {
         self * other
+    }
+    fn matmul(&self, other: &Self) -> Self {
+        //TODO: Remove cloning (maybe by passing Raw<T>
+        let x = self
+            .clone()
+            .into_dimensionality::<Ix2>()
+            .expect("Not a 2x2 matrix");
+        let y = other
+            .clone()
+            .into_dimensionality::<Ix2>()
+            .expect("Not a 2x2 matrix");
+
+        (x.dot(&y)).into_dyn()
+    }
+    fn t(&self) -> Self {
+        self.clone().reversed_axes()
     }
 }
 impl TensorType for WgpuArray<'_, f32, IxDyn> {
@@ -41,12 +59,28 @@ impl TensorType for WgpuArray<'_, f32, IxDyn> {
     fn mul(&self, other: &Self) -> Self {
         self * other
     }
+    fn matmul(&self, other: &Self) -> Self {
+        //TODO: Remove cloning (maybe by passing Raw<T>
+        let x = self
+            .clone()
+            .into_dimensionality::<Ix2>()
+            .expect("Not a 2x2 matrix");
+        let y = other
+            .clone()
+            .into_dimensionality::<Ix2>()
+            .expect("Not a 2x2 matrix");
+
+        (x.dot(&y)).into_dyn()
+    }
+    fn t(&self) -> Self {
+        self.clone().reversed_axes()
+    }
 }
 
 ///
 /// Rust doesn't have an easy way to deal with cyclic pointers.
 /// So this Raw struct exposes unsafe code
-/// TODO: Look into Rc/Weak
+/// TODO: Look into using Rc/Weak
 ///
 pub struct Raw<T: TensorType> {
     pub data: *mut T,
@@ -101,7 +135,7 @@ impl<T: TensorType> Clone for Tensor<'_, '_, T> {
     }
 }
 
-impl<T: TensorType + Clone> Tensor<'_, '_, T> {
+impl<'g, 'n, T: 'n + TensorType + Clone> Tensor<'g, 'n, T> {
     ///
     /// Returns a CPU copy of the data represented by the Tensor
     ///
@@ -197,24 +231,31 @@ impl<T: TensorType + Clone> Tensor<'_, '_, T> {
         }
     }
 
-    //pub fn matmul(self, other: Tensor<'g, T>) -> Tensor<'g, T> {
-    //    let mut nodes = self.graph.nodes.borrow_mut();
+    pub fn matmul(self, other: Tensor<'g, 'n, T>) -> Tensor<'g, 'n, T> {
+        assert_eq!(
+            self.graph as *const Graph<T>,
+            other.graph as *const Graph<T>
+        );
+        let mut nodes = self.graph.nodes.borrow_mut();
 
-    //    let len = nodes.len();
+        let len = nodes.len();
 
-    //    use crate::functions::MatMul;
-    //    nodes.push(RefCell::new(Node {
-    //        deps: [self.index, other.index],
-    //        func: Function::Two(Box::new(MatMul{x_ctx: None, y_ctx: None})),
-    //        value: None,
-    //        grad: None,
-    //        ctx: [None, None],
-    //    }));
-    //    Tensor {
-    //        graph: self.graph,
-    //        index: len,
-    //    }
-    //}
+        use crate::functions::MatMul;
+        nodes.push(RefCell::new(Node {
+            deps: [self.index, other.index],
+            func: Function::Two(Box::new(MatMul {
+                x_ctx: None,
+                y_ctx: None,
+            })),
+            value: None,
+            grad: None,
+            ctx: [None, None],
+        }));
+        Tensor {
+            graph: self.graph,
+            index: len,
+        }
+    }
 }
 
 impl<'g, 'n, T: TensorType> ::std::ops::Add for Tensor<'g, 'n, T> {

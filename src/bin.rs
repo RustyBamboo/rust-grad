@@ -18,7 +18,7 @@ pub fn main() {
     let x = graph.tensor(x);
     let y = graph.tensor(y);
 
-    let z = x * y;
+    let z = x.matmul(y);
 
     z.forward(); // forward pass
 

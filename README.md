@@ -1,12 +1,12 @@
 # Autograd in Rust
 
-Automatic differentiation for scalars and tensors written in Rust.
+A small Automatic differentiation library for scalars and tensors written in Rust.
 
-Supports CPU and GPU via `ndarray` fork that provides WebGPU support. 
+Has a GPU backend via a `ndarray` fork that provides WebGPU support. 
 
 ## Examples
 
-### GPU-Backend
+### GPU-Backend via WGPU
 
 ```rust
 use rust_grad::Graph;
@@ -35,7 +35,9 @@ pub fn main() {
     
     println!("{}", z.value());
 
-    z.backward(); // backward pass
+    z.backward(ndarray::Array::ones((3, 3))
+                                .into_dyn()
+                                .into_wgpu(&d)); // backward pass
 
     println!("dz/dx {}", x.grad());
     println!("dz/dy {}", y.grad());
@@ -59,7 +61,9 @@ pub fn main() {
     
     println!("{}", z.value());
 
-    z.backward(); // backward pass
+    z.backward(ndarray::Array::ones(2)
+                                .into_dyn()); // backward pass
+
 
     println!("dz/dz {}", z.grad()); // dz/dz [1,1]
     println!("dz/dx {}", x.grad()); // dz/dx [5,8]
@@ -104,7 +108,9 @@ pub fn main() {
     
     println!("{}", z.value());
 
-    z.backward(); // backward pass
+    z.backward(ndarray::Array::ones((3, 3))
+                                .into_dyn()); // backward pass
+
 
     println!("dz/dx {}", x.grad());
     println!("dz/dy {}", y.grad());
