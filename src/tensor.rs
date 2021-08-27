@@ -256,6 +256,39 @@ impl<'g, 'n, T: 'n + TensorType + Clone> Tensor<'g, 'n, T> {
             index: len,
         }
     }
+
+    pub fn expm(self) -> Tensor<'g, 'n, T> {
+        {
+            let nodes = self.graph.nodes.borrow();
+            let node = nodes[self.index].borrow();
+            let val = node.value.as_ref().expect("Was forward called?");
+
+            //let x = unsafe { &*val.data };
+            let x = val.value();
+
+            let cpu = x.get_value_cpu();
+
+            // Get the L1 norm of matrix
+            let mut norm: f64 = 0.;
+            for c in cpu.columns() {
+                let sum = c.into_iter().map(|x| x.abs() as f64).sum();
+                if sum > norm {
+                    norm = sum;
+                }
+            }
+            println!("Norm {}", norm);
+
+            if norm < 4.258730016922831e-001 {
+                let b = [120., 60., 12., 1.];
+
+                //let eye = self.graph.tensor(
+                //let a2 = self.matmul(self);
+            } else if norm < 1.880152677804762e+000 {
+            } else {
+            }
+        }
+        self.matmul(self)
+    }
 }
 
 impl<'g, 'n, T: TensorType> ::std::ops::Add for Tensor<'g, 'n, T> {
