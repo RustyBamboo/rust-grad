@@ -10,15 +10,15 @@ use std::fmt;
 /// The Function enum indicates the func to apply to the value in a forward pass
 ///
 
-pub struct Node<'n, T: TensorType> {
+pub struct Node<'d, T: TensorType<'d>> {
     pub deps: [usize; 2],
-    pub func: Function<'n, T>,
-    pub value: Option<Raw<T>>,
-    pub grad: Option<Raw<T>>,
-    pub ctx: [Option<Raw<T>>; 2],
+    pub func: Function<'d, T>,
+    pub value: Option<Raw<'d, T>>,
+    pub grad: Option<Raw<'d, T>>,
+    pub ctx: [Option<Raw<'d, T>>; 2],
 }
 
-impl<T: TensorType> fmt::Debug for Node<'_, T> {
+impl<'d, T: TensorType<'d>> fmt::Debug for Node<'d, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let node_string = format!("{:?}", self.deps);
 
@@ -37,11 +37,11 @@ impl<T: TensorType> fmt::Debug for Node<'_, T> {
 /// and immutably, so we wrap it with a RefCell.
 ///
 
-pub struct Graph<'n, T: TensorType> {
-    pub nodes: RefCell<Vec<RefCell<Node<'n, T>>>>,
+pub struct Graph<'d, T: TensorType<'d>> {
+    pub nodes: RefCell<Vec<RefCell<Node<'d, T>>>>,
 }
 
-impl<'n, T: TensorType> Graph<'n, T> {
+impl<'d, T: TensorType<'d>> Graph<'d, T> {
     ///
     /// Create a new graph to store the computations
     ///
@@ -58,7 +58,7 @@ impl<'n, T: TensorType> Graph<'n, T> {
     ///
     /// Create a Tensor object which takes ownership of a TensorType
     ///
-    pub fn tensor<'g>(&'g self, value: T) -> Tensor<'g, 'n, T> {
+    pub fn tensor<'g>(&'g self, value: T) -> Tensor<'d, 'g, T> {
         let mut nodes = self.nodes.borrow_mut();
         let len = nodes.len();
 
@@ -78,7 +78,7 @@ impl<'n, T: TensorType> Graph<'n, T> {
     }
 }
 
-impl<T: TensorType> fmt::Debug for Graph<'_, T> {
+impl<'d, T: TensorType<'d>> fmt::Debug for Graph<'d, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut node_string = String::new();
         for node in &*self.nodes.borrow() {

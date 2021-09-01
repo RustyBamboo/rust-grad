@@ -1,27 +1,39 @@
 use crate::functions::Function;
 use crate::graph::{Graph, Node};
 use std::cell::RefCell;
+use std::marker::PhantomData;
 
 use ndarray::{Array, Ix2, IxDyn, WgpuArray};
 
 ///
 /// The base trait for Tensor objects
 ///
-pub trait TensorType {
+pub trait TensorType<'d> {
     fn get_value_cpu(&self) -> Array<f32, IxDyn>;
     fn tensor(&self) -> &Self;
     fn add(&self, other: &Self) -> Self;
     fn mul(&self, other: &Self) -> Self;
     fn matmul(&self, other: &Self) -> Self;
     fn t(&self) -> Self;
+    fn expm(&self) -> Self;
+    fn ones_like(&'d self) -> Self;
+    fn eye_like(&'d self) -> Self;
 }
-impl TensorType for Array<f32, IxDyn> {
+impl<'d> TensorType<'d> for Array<f32, IxDyn> {
     fn get_value_cpu(&self) -> Array<f32, IxDyn> {
         self.clone()
     }
     fn tensor(&self) -> &Self {
         self
     }
+    fn ones_like(&'d self) -> Self {
+        let shape = self.shape();
+        Array::ones(shape)
+    }
+    fn eye_like(&'d self) -> Self {
+        let shape = self.shape();
+        Array::eye(shape[0]).into_dyn()
+    }
     fn add(&self, other: &Self) -> Self {
         self + other
     }
@@ -44,14 +56,26 @@ impl TensorType for Array<f32, IxDyn> {
     fn t(&self) -> Self {
         self.clone().reversed_axes()
     }
+    fn expm(&self) -> Self {
+        todo!()
+    }
 }
-impl TensorType for WgpuArray<'_, f32, IxDyn> {
+impl<'d> TensorType<'d> for WgpuArray<'d, f32, IxDyn> {
     fn get_value_cpu(&self) -> Array<f32, IxDyn> {
         self.clone().into_cpu()
     }
-
     fn tensor(&self) -> &Self {
         self
+    }
+    fn ones_like(&'d self) -> Self {
+        let d = self.get_wgpu_device();
+        let shape = self.shape();
+        Array::ones(shape).into_wgpu(d)
+    }
+    fn eye_like(&'d self) -> Self {
+        let d = self.get_wgpu_device();
+        let shape = self.shape();
+        Array::eye(shape[0]).into_dyn().into_wgpu(d)
     }
     fn add(&self, other: &Self) -> Self {
         self + other
@@ -74,6 +98,9 @@ impl TensorType for WgpuArray<'_, f32, IxDyn> {
     }
     fn t(&self) -> Self {
         self.clone().reversed_axes()
+    }
+    fn expm(&self) -> Self {
+        self.clone().exp()
     }
 }
 
@@ -82,18 +109,22 @@ impl TensorType for WgpuArray<'_, f32, IxDyn> {
 /// So this Raw struct exposes unsafe code
 /// TODO: Look into using Rc/Weak
 ///
-pub struct Raw<T: TensorType> {
+pub struct Raw<'d, T: TensorType<'d>> {
     pub data: *mut T,
+    pub _phantom: PhantomData<&'d ()>,
 }
 
-impl<T: TensorType> Raw<T> {
+impl<'d, T: TensorType<'d>> Raw<'d, T> {
     pub fn new(data: T) -> Self {
         let data = Box::new(data);
         let data = Box::into_raw(data);
-        Raw { data }
+        Raw {
+            data,
+            _phantom: PhantomData,
+        }
     }
 
-    pub fn value(&self) -> &T {
+    pub fn value(&self) -> &'d T {
         //TODO: Manually drop memory?
         unsafe { &*self.data }
     }
@@ -103,9 +134,9 @@ impl<T: TensorType> Raw<T> {
     }
 }
 
-impl<T: TensorType> Copy for Raw<T> {}
+impl<'d, T: TensorType<'d>> Copy for Raw<'d, T> {}
 
-impl<T: TensorType> Clone for Raw<T> {
+impl<'d, T: TensorType<'d>> Clone for Raw<'d, T> {
     fn clone(&self) -> Self {
         *self
     }
@@ -122,20 +153,20 @@ impl<T: TensorType> Clone for Raw<T> {
 /// let t = g.tensor(...);
 /// ```
 ///
-pub struct Tensor<'g, 'n, T: TensorType> {
-    pub graph: &'g Graph<'n, T>,
+pub struct Tensor<'d, 'g, T: 'd + TensorType<'d>> {
+    pub graph: &'g Graph<'d, T>,
     pub index: usize,
 }
 
-impl<T: TensorType> Copy for Tensor<'_, '_, T> {}
+impl<'d, T: TensorType<'d>> Copy for Tensor<'d, '_, T> {}
 
-impl<T: TensorType> Clone for Tensor<'_, '_, T> {
+impl<'d, T: TensorType<'d>> Clone for Tensor<'d, '_, T> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<'g, 'n, T: 'n + TensorType + Clone> Tensor<'g, 'n, T> {
+impl<'d, 'g, T: 'd + TensorType<'d> + Clone> Tensor<'d, 'g, T> {
     ///
     /// Returns a CPU copy of the data represented by the Tensor
     ///
@@ -171,7 +202,10 @@ impl<'g, 'n, T: 'n + TensorType + Clone> Tensor<'g, 'n, T> {
             let d_1 = node.deps[1];
             match &mut node.func {
                 Function::None => (),
-                Function::One(_f) => todo!(),
+                Function::One(f) => {
+                    let n_l: Raw<T> = nodes[d_0].borrow().value.clone().unwrap();
+                    node.value = Some(f.forward(n_l));
+                }
                 Function::Two(f) => {
                     let n_l: Raw<T> = nodes[d_0].borrow().value.clone().unwrap();
                     let n_r: Raw<T> = nodes[d_1].borrow().value.clone().unwrap();
@@ -202,8 +236,7 @@ impl<'g, 'n, T: 'n + TensorType + Clone> Tensor<'g, 'n, T> {
 
                 match &node.func {
                     Function::None => (),
-                    Function::One(_f) => todo!(),
-                    //Function::Two(_f) => todo!(),
+                    Function::One(f) => node.ctx = f.backward(node.grad.clone().unwrap()),
                     Function::Two(f) => node.ctx = f.backward(node.grad.clone().unwrap()),
                 }
             }
@@ -231,7 +264,7 @@ impl<'g, 'n, T: 'n + TensorType + Clone> Tensor<'g, 'n, T> {
         }
     }
 
-    pub fn matmul(self, other: Tensor<'g, 'n, T>) -> Tensor<'g, 'n, T> {
+    pub fn matmul(self, other: Tensor<'d, 'g, T>) -> Tensor<'d, 'g, T> {
         assert_eq!(
             self.graph as *const Graph<T>,
             other.graph as *const Graph<T>
@@ -257,43 +290,38 @@ impl<'g, 'n, T: 'n + TensorType + Clone> Tensor<'g, 'n, T> {
         }
     }
 
-    pub fn expm(self) -> Tensor<'g, 'n, T> {
-        {
-            let nodes = self.graph.nodes.borrow();
-            let node = nodes[self.index].borrow();
-            let val = node.value.as_ref().expect("Was forward called?");
+    ///
+    /// Take a matrix exponential
+    ///
+    /// Note: The matrix must be diagonal.
+    ///
+    /// TODO: Repeated squaring + Pade approximation for general case
+    ///
+    pub fn expm(self) -> Tensor<'d, 'g, T> {
+        let mut nodes = self.graph.nodes.borrow_mut();
 
-            //let x = unsafe { &*val.data };
-            let x = val.value();
-
-            let cpu = x.get_value_cpu();
-
-            // Get the L1 norm of matrix
-            let mut norm: f64 = 0.;
-            for c in cpu.columns() {
-                let sum = c.into_iter().map(|x| x.abs() as f64).sum();
-                if sum > norm {
-                    norm = sum;
-                }
-            }
-            println!("Norm {}", norm);
-
-            if norm < 4.258730016922831e-001 {
-                let b = [120., 60., 12., 1.];
-
-                //let eye = self.graph.tensor(
-                //let a2 = self.matmul(self);
-            } else if norm < 1.880152677804762e+000 {
-            } else {
-            }
+        let len = nodes.len();
+        use crate::functions::ExpM;
+        nodes.push(RefCell::new(Node {
+            deps: [self.index, self.index],
+            func: Function::One(Box::new(ExpM {
+                x_ctx: None,
+                res: None,
+            })),
+            value: None,
+            grad: None,
+            ctx: [None, None],
+        }));
+        Tensor {
+            graph: self.graph,
+            index: len,
         }
-        self.matmul(self)
     }
 }
 
-impl<'g, 'n, T: TensorType> ::std::ops::Add for Tensor<'g, 'n, T> {
-    type Output = Tensor<'g, 'n, T>;
-    fn add(self, other: Tensor<'g, 'n, T>) -> Self::Output {
+impl<'d, 'g, T: TensorType<'d>> ::std::ops::Add for Tensor<'d, 'g, T> {
+    type Output = Tensor<'d, 'g, T>;
+    fn add(self, other: Tensor<'d, 'g, T>) -> Self::Output {
         assert_eq!(
             self.graph as *const Graph<T>,
             other.graph as *const Graph<T>
@@ -317,9 +345,9 @@ impl<'g, 'n, T: TensorType> ::std::ops::Add for Tensor<'g, 'n, T> {
     }
 }
 
-impl<'g, 'n, T: 'n + TensorType> ::std::ops::Mul for Tensor<'g, 'n, T> {
-    type Output = Tensor<'g, 'n, T>;
-    fn mul(self, other: Tensor<'g, 'n, T>) -> Self::Output {
+impl<'d, 'g, T: TensorType<'d>> ::std::ops::Mul for Tensor<'d, 'g, T> {
+    type Output = Tensor<'d, 'g, T>;
+    fn mul(self, other: Tensor<'d, 'g, T>) -> Self::Output {
         assert_eq!(
             self.graph as *const Graph<T>,
             other.graph as *const Graph<T>
@@ -328,13 +356,18 @@ impl<'g, 'n, T: 'n + TensorType> ::std::ops::Mul for Tensor<'g, 'n, T> {
 
         let len = nodes.len();
 
+        let m: Mul<'d, T> = Mul {
+            x_ctx: None,
+            y_ctx: None,
+        };
+        let b = Box::new(m);
+
+        let func: Function<'d, T> = Function::Two(b);
+
         use crate::functions::Mul;
         nodes.push(RefCell::new(Node {
             deps: [self.index, other.index],
-            func: Function::Two(Box::new(Mul {
-                x_ctx: None,
-                y_ctx: None,
-            })),
+            func,
             value: None,
             grad: None,
             ctx: [None, None],
