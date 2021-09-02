@@ -89,6 +89,8 @@ impl<'d, T: TensorType<'d>> TwoValuedFn<'d, T> for MatMul<'d, T> {
     }
 }
 
+// TODO: Implement more generic expm
+// https://dl.acm.org/doi/10.1137/S0895479895283409
 pub struct ExpM<'d, T: 'd + TensorType<'d>> {
     pub res: Option<Raw<'d, T>>,
     pub x_ctx: Option<Raw<'d, T>>,
@@ -107,7 +109,10 @@ impl<'d, T: TensorType<'d>> OneValuedFn<'d, T> for ExpM<'d, T> {
     fn backward(&self, grad: Raw<'d, T>) -> [Option<Raw<'d, T>>; 2] {
         let x_ctx = self.x_ctx.unwrap().value();
         let res = self.res.unwrap().value();
-        let a = grad.value().mul(&x_ctx.matmul(res));
+        let grad = grad.value();
+        //let a = grad.value().mul(&x_ctx.matmul(res));
+        //TODO: Use matmul? Any size?
+        let a = res.mul(grad);
         [Some(Raw::new(a)), None]
     }
 }
