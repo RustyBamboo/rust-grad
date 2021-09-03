@@ -57,7 +57,8 @@ impl<'d> TensorType<'d> for Array<f32, IxDyn> {
         self.clone().reversed_axes()
     }
     fn expm(&self) -> Self {
-        todo!()
+        self.mapv(|x| x.exp())
+        //Array::from_iter(self.iter().map(|x| x.exp()))
     }
 }
 impl<'d> TensorType<'d> for WgpuArray<'d, f32, IxDyn> {
