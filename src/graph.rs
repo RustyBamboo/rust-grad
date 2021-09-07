@@ -41,6 +41,12 @@ pub struct Graph<'d, T: TensorType<'d>> {
     pub nodes: RefCell<Vec<RefCell<Node<'d, T>>>>,
 }
 
+impl<'d, T: TensorType<'d>> Default for Graph<'d, T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<'d, T: TensorType<'d>> Graph<'d, T> {
     ///
     /// Create a new graph to store the computations
@@ -53,6 +59,10 @@ impl<'d, T: TensorType<'d>> Graph<'d, T> {
 
     pub fn len(&self) -> usize {
         self.nodes.borrow().len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 
     ///

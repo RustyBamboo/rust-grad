@@ -204,12 +204,12 @@ impl<'d, 'g, T: 'd + TensorType<'d> + Clone> Tensor<'d, 'g, T> {
             match &mut node.func {
                 Function::None => (),
                 Function::One(f) => {
-                    let n_l: Raw<T> = nodes[d_0].borrow().value.clone().unwrap();
+                    let n_l: Raw<T> = nodes[d_0].borrow().value.unwrap();
                     node.value = Some(f.forward(n_l));
                 }
                 Function::Two(f) => {
-                    let n_l: Raw<T> = nodes[d_0].borrow().value.clone().unwrap();
-                    let n_r: Raw<T> = nodes[d_1].borrow().value.clone().unwrap();
+                    let n_l: Raw<T> = nodes[d_0].borrow().value.unwrap();
+                    let n_r: Raw<T> = nodes[d_1].borrow().value.unwrap();
                     node.value = Some(f.forward(n_l, n_r));
                 }
             }
@@ -237,8 +237,8 @@ impl<'d, 'g, T: 'd + TensorType<'d> + Clone> Tensor<'d, 'g, T> {
 
                 match &node.func {
                     Function::None => (),
-                    Function::One(f) => node.ctx = f.backward(node.grad.clone().unwrap()),
-                    Function::Two(f) => node.ctx = f.backward(node.grad.clone().unwrap()),
+                    Function::One(f) => node.ctx = f.backward(node.grad.unwrap()),
+                    Function::Two(f) => node.ctx = f.backward(node.grad.unwrap()),
                 }
             }
 
@@ -256,10 +256,8 @@ impl<'d, 'g, T: 'd + TensorType<'d> + Clone> Tensor<'d, 'g, T> {
                             *grad.data = grad.value().add(w.value());
                         }
                     }
-                } else {
-                    if let Some(w) = &node.ctx[j] {
-                        node_d.grad = Some(Raw::new(w.value().clone()));
-                    }
+                } else if let Some(w) = &node.ctx[j] {
+                    node_d.grad = Some(Raw::new(w.value().clone()));
                 }
             }
         }

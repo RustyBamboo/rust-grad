@@ -107,7 +107,7 @@ impl<'d, T: TensorType<'d>> OneValuedFn<'d, T> for ExpM<'d, T> {
         t_out
     }
     fn backward(&self, grad: Raw<'d, T>) -> [Option<Raw<'d, T>>; 2] {
-        let x_ctx = self.x_ctx.unwrap().value();
+        let _x_ctx = self.x_ctx.unwrap().value();
         let res = self.res.unwrap().value();
         let grad = grad.value();
         //let a = grad.value().mul(&x_ctx.matmul(res));
