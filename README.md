@@ -30,6 +30,11 @@ cargo run
 
 ## Examples
 
+- [Element-wise Operations](#element-wise-operation)
+- [Matrix Multiply](#matrix-multiply)
+- [Matrix Exponential](#matrix-exponential)
+- [GPU-Backend via WGPU](#gpu-backend-via-wgpu)
+
 ### Element-wise Operation
 
 ```rust
@@ -121,6 +126,63 @@ z.backward(torch.ones_like(x))
 print(f"dz/dx {x.grad}")  # dz/dx
 print(f"dz/dy {y.grad}")  # dz/dy
 ```
+
+### Matrix Exponential
+
+Limited to diagonal matrices.
+
+```rust
+use rust_grad::Graph;
+
+pub fn main() {
+    let graph = Graph::new();
+
+    let x = graph.tensor(ndarray::array![[1.0, 0.0, 0.0],
+                                         [0.0, 1.0, 0.0],
+                                         [0.0, 0.0, 2.0]].into_dyn());
+
+    let z = x.expm();
+
+    z.forward(); // forward pass
+    
+    println!("{}", z.value()); // [[2.7182822, 0, 0],
+                               // [0, 2.7182822, 0],
+                               // [0, 0, 7.3890576]]
+
+    z.backward(ndarray::Array::ones((3, 3))
+                                .into_dyn()); // backward pass
+
+
+    println!("dz/dx {}", x.grad()); // [[2.7182822, 2.7182822, 4.67016],
+                                    // [2.7182822, 2.7182822, 4.67016],
+                                    // [4.6694736, 4.6694736, 7.3890576]]
+}
+```
+
+### Same Example in Torch
+
+```python
+import torch
+
+x = torch.tensor([[1.0, 0.0, 0.0],
+                  [0.0, 1.0, 0.0],
+                  [0.0, 0.0, 2.0]], requires_grad=True)
+
+z = torch.matrix_exp(x)
+
+print(z) # tensor([[2.7183, 0.0000, 0.0000],
+         #        [0.0000, 2.7183, 0.0000],
+         #        [0.0000, 0.0000, 7.3891]]) 
+          
+z.backwar d(torch.ones_like(x))
+
+print(f"dz/dx {x.grad}") # tensor([[2.7183, 2.7183, 4.6708],
+                         #        [2.7183, 2.7183, 4.6708],
+                         #        [4.6708, 4.6708, 7.3891]])
+ 
+```
+
+
 
 ### GPU-Backend via WGPU
 

@@ -92,12 +92,12 @@ impl<'d, T: TensorType<'d>> TwoValuedFn<'d, T> for MatMul<'d, T> {
 // TODO: Implement more generic expm
 // https://dl.acm.org/doi/10.1137/S0895479895283409
 pub struct ExpM<'d, T: 'd + TensorType<'d>> {
+    pub a: Option<Raw<'d, T>>,
     pub res: Option<Raw<'d, T>>,
-    pub x_ctx: Option<Raw<'d, T>>,
 }
-impl<'d, T: TensorType<'d>> OneValuedFn<'d, T> for ExpM<'d, T> {
+impl<'d, T: TensorType<'d> + Clone> OneValuedFn<'d, T> for ExpM<'d, T> {
     fn forward(&mut self, t_a: Raw<'d, T>) -> Raw<'d, T> {
-        self.x_ctx = Some(t_a);
+        self.a = Some(t_a);
         let val = t_a.value();
 
         let eye = val.eye_like();
@@ -106,13 +106,38 @@ impl<'d, T: TensorType<'d>> OneValuedFn<'d, T> for ExpM<'d, T> {
         self.res = Some(t_out);
         t_out
     }
+    ///
+    /// The backward pass implements a truncated power series for the derivative of exponential map
+    /// of a lie group
+    ///
+    /// https://en.wikipedia.org/wiki/Derivative_of_the_exponential_map
+    ///
     fn backward(&self, grad: Raw<'d, T>) -> [Option<Raw<'d, T>>; 2] {
-        let _x_ctx = self.x_ctx.unwrap().value();
+        let a = self.a.unwrap().value();
         let res = self.res.unwrap().value();
         let grad = grad.value();
-        //let a = grad.value().mul(&x_ctx.matmul(res));
-        //TODO: Use matmul? Any size?
-        let a = res.mul(grad);
+
+        let commu = |a: &T, b: &T| a.matmul(b).sub(&b.matmul(a));
+
+        let mut p_commu = grad.clone();
+        let mut total = grad.clone();
+
+        let mut factorial: i32 = 1;
+
+        for o in 2..7 {
+            factorial = factorial * o;
+            let factor = if o % 2 == 0 { -1 } else { 1 };
+
+            let new_commu = commu(a, &p_commu);
+            p_commu = new_commu.clone();
+
+            //TODO: create an element-wise operation which does not require creation of another
+            //matrix
+            let fac_mat = a.val_like((factor * factorial) as f32);
+            total = total.add(&new_commu.div(&fac_mat));
+        }
+
+        let a = res.matmul(&total);
         [Some(Raw::new(a)), None]
     }
 }

@@ -12,10 +12,13 @@ pub trait TensorType<'d> {
     fn get_value_cpu(&self) -> Array<f32, IxDyn>;
     fn tensor(&self) -> &Self;
     fn add(&self, other: &Self) -> Self;
+    fn sub(&self, other: &Self) -> Self;
     fn mul(&self, other: &Self) -> Self;
+    fn div(&self, other: &Self) -> Self;
     fn matmul(&self, other: &Self) -> Self;
     fn t(&self) -> Self;
     fn expm(&self) -> Self;
+    fn val_like(&'d self, val: f32) -> Self;
     fn ones_like(&'d self) -> Self;
     fn eye_like(&'d self) -> Self;
 }
@@ -25,6 +28,10 @@ impl<'d> TensorType<'d> for Array<f32, IxDyn> {
     }
     fn tensor(&self) -> &Self {
         self
+    }
+    fn val_like(&'d self, val: f32) -> Self {
+        let shape = self.shape();
+        Array::ones(shape) * val
     }
     fn ones_like(&'d self) -> Self {
         let shape = self.shape();
@@ -37,8 +44,14 @@ impl<'d> TensorType<'d> for Array<f32, IxDyn> {
     fn add(&self, other: &Self) -> Self {
         self + other
     }
+    fn sub(&self, other: &Self) -> Self {
+        self - other
+    }
     fn mul(&self, other: &Self) -> Self {
         self * other
+    }
+    fn div(&self, other: &Self) -> Self {
+        self / other
     }
     fn matmul(&self, other: &Self) -> Self {
         //TODO: Remove cloning (maybe by passing Raw<T>
@@ -68,6 +81,11 @@ impl<'d> TensorType<'d> for WgpuArray<'d, f32, IxDyn> {
     fn tensor(&self) -> &Self {
         self
     }
+    fn val_like(&'d self, val: f32) -> Self {
+        let d = self.get_wgpu_device();
+        let shape = self.shape();
+        (Array::ones(shape) * val).into_wgpu(d)
+    }
     fn ones_like(&'d self) -> Self {
         let d = self.get_wgpu_device();
         let shape = self.shape();
@@ -81,8 +99,14 @@ impl<'d> TensorType<'d> for WgpuArray<'d, f32, IxDyn> {
     fn add(&self, other: &Self) -> Self {
         self + other
     }
+    fn sub(&self, other: &Self) -> Self {
+        self - other
+    }
     fn mul(&self, other: &Self) -> Self {
         self * other
+    }
+    fn div(&self, other: &Self) -> Self {
+        self / other
     }
     fn matmul(&self, other: &Self) -> Self {
         //TODO: Remove cloning (maybe by passing Raw<T>
@@ -303,10 +327,7 @@ impl<'d, 'g, T: 'd + TensorType<'d> + Clone> Tensor<'d, 'g, T> {
         use crate::functions::ExpM;
         nodes.push(RefCell::new(Node {
             deps: [self.index, self.index],
-            func: Function::One(Box::new(ExpM {
-                x_ctx: None,
-                res: None,
-            })),
+            func: Function::One(Box::new(ExpM { a: None, res: None })),
             value: None,
             grad: None,
             ctx: [None, None],
