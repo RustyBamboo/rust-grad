@@ -221,7 +221,15 @@ pub fn main() {
     println!("dz/dy {}", y.grad());
 }
 ```
-            
+
+## Benchmarks
+
+Requires `nightly` edition of Rust.
+
+```
+cargo +nightly bench
+```
+         
 ## Goals and TODOs
 
 - [x] Scalars
@@ -230,6 +238,7 @@ pub fn main() {
 - [x] Lazy execution (via `tensor.backward()` and `tensor.forward()`
 - [x] CPU support through `ndarray` 
 - [x] GPU support through WebGPU
+- [x] Faster method calls using `enum_dispatch`
 
 ## License
 

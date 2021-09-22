@@ -10,6 +10,7 @@ edition = "2018"
 ndarray = {git = "https://github.com/RustyBamboo/ndarray", branch="wgpu"}
 # ndarray = { path = "../ndarray" }
 futures = "*"
+enum_dispatch = "0.3"
 
 [[bin]]
 name = "optimize"

@@ -10,7 +10,7 @@ use std::fmt;
 /// The Function enum indicates the func to apply to the value in a forward pass
 ///
 
-pub struct Node<'d, T: TensorType<'d>> {
+pub struct Node<'d, T: TensorType<'d> + Clone> {
     pub deps: [usize; 2],
     pub func: Function<'d, T>,
     pub value: Option<Raw<'d, T>>,
@@ -18,7 +18,7 @@ pub struct Node<'d, T: TensorType<'d>> {
     pub ctx: [Option<Raw<'d, T>>; 2],
 }
 
-impl<'d, T: TensorType<'d>> fmt::Debug for Node<'d, T> {
+impl<'d, T: TensorType<'d> + Clone> fmt::Debug for Node<'d, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let node_string = format!("{:?}", self.deps);
 
@@ -37,17 +37,17 @@ impl<'d, T: TensorType<'d>> fmt::Debug for Node<'d, T> {
 /// and immutably, so we wrap it with a RefCell.
 ///
 
-pub struct Graph<'d, T: TensorType<'d>> {
+pub struct Graph<'d, T: TensorType<'d> + Clone> {
     pub nodes: RefCell<Vec<RefCell<Node<'d, T>>>>,
 }
 
-impl<'d, T: TensorType<'d>> Default for Graph<'d, T> {
+impl<'d, T: TensorType<'d> + Clone> Default for Graph<'d, T> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<'d, T: TensorType<'d>> Graph<'d, T> {
+impl<'d, T: TensorType<'d> + Clone> Graph<'d, T> {
     ///
     /// Create a new graph to store the computations
     ///
@@ -88,7 +88,7 @@ impl<'d, T: TensorType<'d>> Graph<'d, T> {
     }
 }
 
-impl<'d, T: TensorType<'d>> fmt::Debug for Graph<'d, T> {
+impl<'d, T: TensorType<'d> + Clone> fmt::Debug for Graph<'d, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut node_string = String::new();
         for node in &*self.nodes.borrow() {

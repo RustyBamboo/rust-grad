@@ -1,5 +1,18 @@
 use crate::tensor::Raw;
 use crate::tensor::TensorType;
+use enum_dispatch::enum_dispatch;
+
+#[enum_dispatch(OneValuedFn<T>)]
+pub enum OneValuedFnEnum<'d, T: TensorType<'d> + Clone> {
+    ExpM(ExpM<'d, T>),
+}
+
+#[enum_dispatch(TwoValuedFn<T>)]
+pub enum TwoValuedFnEnum<'d, T: TensorType<'d> + Clone> {
+    Add,
+    Mul(Mul<'d, T>),
+    MatMul(MatMul<'d, T>),
+}
 
 ///
 /// Enum of function types:
@@ -7,17 +20,19 @@ use crate::tensor::TensorType;
 /// - Single Valued e.g.: x.sin()
 /// - Double Valued e.g.: x + y
 ///
-pub enum Function<'d, T: TensorType<'d>> {
+pub enum Function<'d, T: TensorType<'d> + Clone> {
     None,
-    One(Box<dyn OneValuedFn<'d, T> + 'd>),
-    Two(Box<dyn TwoValuedFn<'d, T> + 'd>),
+    One(OneValuedFnEnum<'d, T>),
+    Two(TwoValuedFnEnum<'d, T>),
 }
 
+#[enum_dispatch]
 pub trait OneValuedFn<'d, T: TensorType<'d>> {
     fn forward(&mut self, t_a: Raw<'d, T>) -> Raw<'d, T>;
     fn backward(&self, grad: Raw<'d, T>) -> [Option<Raw<'d, T>>; 2];
 }
 
+#[enum_dispatch]
 pub trait TwoValuedFn<'d, T: TensorType<'d>> {
     fn forward(&mut self, t_a: Raw<'d, T>, t_b: Raw<'d, T>) -> Raw<'d, T>;
     fn backward(&self, grad: Raw<'d, T>) -> [Option<Raw<'d, T>>; 2];

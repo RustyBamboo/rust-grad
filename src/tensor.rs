@@ -1,4 +1,4 @@
-use crate::functions::Function;
+use crate::functions::{Function, OneValuedFn, TwoValuedFn};
 use crate::graph::{Graph, Node};
 use std::cell::RefCell;
 use std::marker::PhantomData;
@@ -178,14 +178,14 @@ impl<'d, T: TensorType<'d>> Clone for Raw<'d, T> {
 /// let t = g.tensor(...);
 /// ```
 ///
-pub struct Tensor<'d, 'g, T: 'd + TensorType<'d>> {
+pub struct Tensor<'d, 'g, T: 'd + TensorType<'d> + Clone> {
     pub graph: &'g Graph<'d, T>,
     pub index: usize,
 }
 
-impl<'d, T: TensorType<'d>> Copy for Tensor<'d, '_, T> {}
+impl<'d, T: TensorType<'d> + Clone> Copy for Tensor<'d, '_, T> {}
 
-impl<'d, T: TensorType<'d>> Clone for Tensor<'d, '_, T> {
+impl<'d, T: TensorType<'d> + Clone> Clone for Tensor<'d, '_, T> {
     fn clone(&self) -> Self {
         *self
     }
@@ -299,10 +299,13 @@ impl<'d, 'g, T: 'd + TensorType<'d> + Clone> Tensor<'d, 'g, T> {
         use crate::functions::MatMul;
         nodes.push(RefCell::new(Node {
             deps: [self.index, other.index],
-            func: Function::Two(Box::new(MatMul {
-                x_ctx: None,
-                y_ctx: None,
-            })),
+            func: Function::Two(
+                MatMul {
+                    x_ctx: None,
+                    y_ctx: None,
+                }
+                .into(),
+            ),
             value: None,
             grad: None,
             ctx: [None, None],
@@ -327,7 +330,7 @@ impl<'d, 'g, T: 'd + TensorType<'d> + Clone> Tensor<'d, 'g, T> {
         use crate::functions::ExpM;
         nodes.push(RefCell::new(Node {
             deps: [self.index, self.index],
-            func: Function::One(Box::new(ExpM { a: None, res: None })),
+            func: Function::One(ExpM { a: None, res: None }.into()),
             value: None,
             grad: None,
             ctx: [None, None],
@@ -339,7 +342,7 @@ impl<'d, 'g, T: 'd + TensorType<'d> + Clone> Tensor<'d, 'g, T> {
     }
 }
 
-impl<'d, 'g, T: TensorType<'d>> ::std::ops::Add for Tensor<'d, 'g, T> {
+impl<'d, 'g, T: TensorType<'d> + Clone> ::std::ops::Add for Tensor<'d, 'g, T> {
     type Output = Tensor<'d, 'g, T>;
     fn add(self, other: Tensor<'d, 'g, T>) -> Self::Output {
         assert_eq!(
@@ -353,7 +356,7 @@ impl<'d, 'g, T: TensorType<'d>> ::std::ops::Add for Tensor<'d, 'g, T> {
         use crate::functions::Add;
         nodes.push(RefCell::new(Node {
             deps: [self.index, other.index],
-            func: Function::Two(Box::new(Add)),
+            func: Function::Two(Add.into()),
             value: None,
             grad: None,
             ctx: [None, None],
@@ -365,7 +368,7 @@ impl<'d, 'g, T: TensorType<'d>> ::std::ops::Add for Tensor<'d, 'g, T> {
     }
 }
 
-impl<'d, 'g, T: TensorType<'d>> ::std::ops::Mul for Tensor<'d, 'g, T> {
+impl<'d, 'g, T: TensorType<'d> + Clone> ::std::ops::Mul for Tensor<'d, 'g, T> {
     type Output = Tensor<'d, 'g, T>;
     fn mul(self, other: Tensor<'d, 'g, T>) -> Self::Output {
         assert_eq!(
@@ -380,9 +383,8 @@ impl<'d, 'g, T: TensorType<'d>> ::std::ops::Mul for Tensor<'d, 'g, T> {
             x_ctx: None,
             y_ctx: None,
         };
-        let b = Box::new(m);
 
-        let func: Function<'d, T> = Function::Two(b);
+        let func: Function<'d, T> = Function::Two(m.into());
 
         use crate::functions::Mul;
         nodes.push(RefCell::new(Node {
